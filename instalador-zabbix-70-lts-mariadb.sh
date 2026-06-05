@@ -5,50 +5,75 @@
 # Banco: MariaDB (última versão estável)
 # Idioma: PT-BR
 # Autor: Script Automatizado
-# Versão: 2.0 - Corrigido e Melhorado
+# Versão: 3.0 - Corrigido e com Barra de Progresso
 # ==============================================
 
 # Cores para output
 RED='\033[0;31m'
 GREEN='\033[0;32m'
-YELLOW='\033[1;33m'
+YELLOW='\033[0;33m'
 BLUE='\033[0;34m'
 CYAN='\033[0;36m'
-NC='\033[0m' # No Color
+NC='\033[0m' # Sem cor
 
 # Variáveis de configuração
 ZBX_VERSION="7.0"
 PHP_VERSION="8.3"
+MARIADB_VERSION="10.11"
 LOG_FILE="/var/log/zabbix_install.log"
 INSTALL_DIR="/tmp/zabbix_install"
+TOTAL_STEPS=20  # Quantidade total de etapas para cálculo da barra
 
-# Função para atualizar progresso
+# ==============================================
+# FUNÇÕES AUXILIARES
+# ==============================================
+
+# Função: Exibir barra de progresso visual + porcentagem
 update_progress() {
-    local progress=$1
+    local current_step=$1
     local message=$2
-    echo -e "${CYAN}[${progress}%] ${GREEN}${message}${NC}"
-    echo "[$(date '+%Y-%m-%d %H:%M:%S')] [${progress}%] ${message}" >> $LOG_FILE
+    # Cálculo da porcentagem
+    local percent=$(( current_step * 100 / TOTAL_STEPS ))
+    # Cálculo do preenchimento da barra (50 caracteres)
+    local filled=$(( percent / 2 ))
+    local empty=$(( 50 - filled ))
+    
+    # Construir barra
+    local bar="["
+    for ((i=0; i<filled; i++)); do bar+="█"; done
+    for ((i=0; i<empty; i++)); do bar+="░"; done
+    bar+="]"
+
+    # Exibir na tela
+    echo -ne "\r${CYAN}${bar} ${GREEN}${percent}% ${NC}- ${message}"
+    # Registrar no log
+    echo "[$(date '+%Y-%m-%d %H:%M:%S')] [${percent}%] ${message}" >> "$LOG_FILE"
 }
 
-# Função para verificar erros
+# Função: Verificar se houve erro em comando anterior
 check_error() {
     if [ $? -ne 0 ]; then
-        echo -e "${RED}❌ ERRO: $1${NC}"
-        echo "[ERRO] $1" >> $LOG_FILE
-        echo -e "${YELLOW}⚠️  Verifique o log em: $LOG_FILE${NC}"
+        echo -e "\n${RED}❌ ERRO: $1${NC}"
+        echo "[ERRO] $1" >> "$LOG_FILE"
+        echo -e "${YELLOW}⚠️  Verifique o log completo em: $LOG_FILE${NC}"
+        echo -e "${YELLOW}💡 Dica: Execute 'journalctl -xe' para detalhes do sistema${NC}"
         exit 1
     fi
 }
 
-# Função para pular linha
+# Função: Pular linha
 new_line() {
-    echo ""
+    echo -e "\n"
 }
+
+# ==============================================
+# VALIDAÇÕES INICIAIS
+# ==============================================
 
 # Verificar execução como root
 if [[ $EUID -ne 0 ]]; then
    echo -e "${RED}❌ Este script deve ser executado como root!${NC}"
-   echo -e "${YELLOW}Use: sudo $0${NC}"
+   echo -e "${YELLOW}Use: sudo bash $0${NC}"
    exit 1
 fi
 
@@ -57,101 +82,103 @@ UBUNTU_VERSION=$(lsb_release -rs)
 UBUNTU_CODENAME=$(lsb_release -sc)
 
 if [[ ! "$UBUNTU_VERSION" =~ ^(22.04|24.04)$ ]]; then
-    echo -e "${RED}❌ Este script funciona apenas no Ubuntu 22.04 ou 24.04${NC}"
+    echo -e "${RED}❌ Este script funciona APENAS no Ubuntu 22.04 ou 24.04${NC}"
     echo -e "${YELLOW}Versão detectada: $UBUNTU_VERSION${NC}"
     exit 1
 fi
 
+# Limpar tela e exibir banner
 clear
-
-# Banner inicial
 echo -e "${CYAN}"
 echo "╔══════════════════════════════════════════════════════════╗"
 echo "║                                                          ║"
 echo "║     🚀 INSTALADOR AUTOMÁTICO ZABBIX 7.0 LTS 🚀          ║"
 echo "║                                                          ║"
-echo "║          All-in-One com MariaDB + PHP $PHP_VERSION          ║"
+echo "║          All-in-One com MariaDB ${MARIADB_VERSION} + PHP ${PHP_VERSION}          ║"
 echo "║                                                          ║"
 echo "╚══════════════════════════════════════════════════════════╝"
 echo -e "${NC}"
-echo ""
-echo -e "${YELLOW}📋 Log da instalação será salvo em: $LOG_FILE${NC}"
+echo -e "${YELLOW}📋 Log da instalação: $LOG_FILE${NC}"
 echo -e "${YELLOW}⏱️  Tempo estimado: 5-10 minutos${NC}"
-echo -e "${YELLOW}🐧 Ubuntu $UBUNTU_VERSION ($UBUNTU_CODENAME) detectado${NC}"
-echo ""
-sleep 3
+echo -e "${YELLOW}🐧 Sistema detectado: Ubuntu $UBUNTU_VERSION ($UBUNTU_CODENAME)${NC}"
+new_line
+sleep 2
 
-# Criar diretório temporário
-mkdir -p $INSTALL_DIR
-cd $INSTALL_DIR
+# Preparar ambiente
+mkdir -p "$INSTALL_DIR"
+cd "$INSTALL_DIR" || exit 1
+> "$LOG_FILE"  # Limpar log anterior
 
 # Gerar senhas seguras
 MYSQL_ROOT_PASSWORD=$(openssl rand -base64 20 | tr -d "=+/" | cut -c1-20)
 ZABBIX_DB_PASSWORD=$(openssl rand -base64 16 | tr -d "=+/" | cut -c1-16)
 
-# Salvar senhas em arquivo seguro
+# Salvar senhas com permissão restrita
 cat > /root/.zabbix_passwords << EOF
 ============================================
-SENHAS GERADAS NA INSTALAÇÃO - GUARDE COM SEGURANÇA!
+🔐 SENHAS GERADAS - GUARDE COM SEGURANÇA!
 ============================================
-MySQL Root Password: $MYSQL_ROOT_PASSWORD
-Zabbix Database User: zabbix
-Zabbix Database Password: $ZABBIX_DB_PASSWORD
+MySQL Root: ${MYSQL_ROOT_PASSWORD}
+--------------------------------------------
+Banco Zabbix:
+  Usuário: zabbix
+  Senha: ${ZABBIX_DB_PASSWORD}
 ============================================
 EOF
 chmod 600 /root/.zabbix_passwords
+chown root:root /root/.zabbix_passwords
 
 # ==============================================
-# ETAPA 1: Atualização do Sistema (0-10%)
+# ETAPAS DE INSTALAÇÃO (20 ETAPAS TOTAIS)
 # ==============================================
-update_progress 0 "Iniciando instalação do Zabbix 7.0 LTS..."
-sleep 1
 
-update_progress 2 "Atualizando repositórios do sistema..."
-apt-get update -y >> $LOG_FILE 2>&1
+# ETAPA 1: Atualizar repositórios
+update_progress 1 "Atualizando lista de pacotes do sistema..."
+apt-get update -y >> "$LOG_FILE" 2>&1
 check_error "Falha ao atualizar repositórios"
 
-update_progress 5 "Atualizando pacotes do sistema..."
-apt-get upgrade -y >> $LOG_FILE 2>&1
-check_error "Falha ao atualizar pacotes"
+# ETAPA 2: Atualizar pacotes
+update_progress 2 "Atualizando pacotes instalados..."
+apt-get upgrade -y >> "$LOG_FILE" 2>&1
+check_error "Falha ao atualizar sistema"
 
-# ==============================================
-# ETAPA 2: Instalação dos Repositórios (10-20%)
-# ==============================================
-update_progress 10 "Instalando dependências básicas..."
-apt-get install -y wget curl gnupg apt-transport-https software-properties-common openssl >> $LOG_FILE 2>&1
+# ETAPA 3: Instalar dependências básicas
+update_progress 3 "Instalando ferramentas e dependências..."
+apt-get install -y wget curl gnupg apt-transport-https software-properties-common openssl lsb-release >> "$LOG_FILE" 2>&1
 check_error "Falha ao instalar dependências"
 
-update_progress 12 "Instalando repositório MariaDB..."
-curl -LsS https://r.mariadb.com/downloads/mariadb_repo_setup | bash -s -- --mariadb-server-version="10.11" >> $LOG_FILE 2>&1
+# ETAPA 4: Configurar repositório MariaDB
+update_progress 4 "Adicionando repositório oficial do MariaDB..."
+curl -LsS https://r.mariadb.com/downloads/mariadb_repo_setup | bash -s -- --mariadb-server-version="${MARIADB_VERSION}" >> "$LOG_FILE" 2>&1
 check_error "Falha ao configurar repositório MariaDB"
 
-update_progress 15 "Instalando repositório Zabbix..."
-wget -q https://repo.zabbix.com/zabbix/$ZBX_VERSION/ubuntu/pool/main/z/zabbix-release/zabbix-release_${ZBX_VERSION}-1+ubuntu${UBUNTU_VERSION}_all.deb >> $LOG_FILE 2>&1
-dpkg -i zabbix-release_${ZBX_VERSION}-1+ubuntu${UBUNTU_VERSION}_all.deb >> $LOG_FILE 2>&1
-check_error "Falha ao configurar repositório Zabbix"
+# ETAPA 5: Configurar repositório Zabbix
+update_progress 5 "Adicionando repositório oficial do Zabbix..."
+wget -q "https://repo.zabbix.com/zabbix/${ZBX_VERSION}/ubuntu/pool/main/z/zabbix-release/zabbix-release_${ZBX_VERSION}-1+ubuntu${UBUNTU_VERSION}_all.deb" >> "$LOG_FILE" 2>&1
+dpkg -i "zabbix-release_${ZBX_VERSION}-1+ubuntu${UBUNTU_VERSION}_all.deb" >> "$LOG_FILE" 2>&1
+check_error "Falha ao instalar pacote de repositório Zabbix"
 
-update_progress 18 "Adicionando repositório PHP $PHP_VERSION..."
-add-apt-repository -y ppa:ondrej/php >> $LOG_FILE 2>&1
+# ETAPA 6: Adicionar repositório PHP
+update_progress 6 "Adicionando repositório PHP ${PHP_VERSION}..."
+add-apt-repository -y ppa:ondrej/php >> "$LOG_FILE" 2>&1
+check_error "Falha ao adicionar repositório PHP"
 
-update_progress 19 "Atualizando repositórios após adições..."
-apt-get update -y >> $LOG_FILE 2>&1
+# ETAPA 7: Atualizar repositórios após adições
+update_progress 7 "Atualizando repositórios com novas fontes..."
+apt-get update -y >> "$LOG_FILE" 2>&1
+check_error "Falha na atualização pós-repositórios"
 
-# ==============================================
-# ETAPA 3: Instalação MariaDB (20-35%)
-# ==============================================
-update_progress 20 "Instalando MariaDB Server..."
-apt-get install -y mariadb-server mariadb-client >> $LOG_FILE 2>&1
-check_error "Falha ao instalar MariaDB"
+# ETAPA 8: Instalar MariaDB
+update_progress 8 "Instalando servidor e cliente MariaDB..."
+apt-get install -y mariadb-server mariadb-client >> "$LOG_FILE" 2>&1
+check_error "Falha na instalação do MariaDB"
 
-update_progress 25 "Configurando MariaDB..."
-systemctl start mariadb >> $LOG_FILE 2>&1
-systemctl enable mariadb >> $LOG_FILE 2>&1
+# ETAPA 9: Configurar segurança do MariaDB
+update_progress 9 "Aplicando configurações de segurança do banco..."
+systemctl start mariadb >> "$LOG_FILE" 2>&1
+systemctl enable mariadb >> "$LOG_FILE" 2>&1
 
-# Configuração segura do MariaDB (método correto para versões atuais)
-update_progress 30 "Aplicando configurações de segurança do MariaDB..."
-
-mysql << EOF
+mysql --defaults-file=/dev/null << EOF
 ALTER USER 'root'@'localhost' IDENTIFIED BY '${MYSQL_ROOT_PASSWORD}';
 DELETE FROM mysql.user WHERE User='';
 DELETE FROM mysql.user WHERE User='root' AND Host NOT IN ('localhost', '127.0.0.1', '::1');
@@ -159,39 +186,45 @@ DROP DATABASE IF EXISTS test;
 DELETE FROM mysql.db WHERE Db='test' OR Db='test\\_%';
 FLUSH PRIVILEGES;
 EOF
-check_error "Falha ao configurar segurança do MariaDB"
+check_error "Falha na configuração segura do MariaDB"
 
-# ==============================================
-# ETAPA 4: Instalação Zabbix Server (35-50%)
-# ==============================================
-update_progress 35 "Instalando Zabbix Server e componentes..."
-apt-get install -y zabbix-server-mysql zabbix-frontend-php zabbix-apache-conf zabbix-sql-scripts zabbix-agent php${PHP_VERSION} php${PHP_VERSION}-mysql php${PHP_VERSION}-gd php${PHP_VERSION}-mbstring php${PHP_VERSION}-bcmath php${PHP_VERSION}-xml php${PHP_VERSION}-ldap >> $LOG_FILE 2>&1
-check_error "Falha ao instalar Zabbix"
+# ETAPA 10: Instalar componentes Zabbix
+update_progress 10 "Instalando Zabbix Server, Frontend e Agente..."
+apt-get install -y zabbix-server-mysql zabbix-frontend-php zabbix-apache-conf zabbix-sql-scripts zabbix-agent >> "$LOG_FILE" 2>&1
+check_error "Falha na instalação dos pacotes Zabbix"
 
-update_progress 40 "Criando banco de dados Zabbix..."
-mysql -uroot -p${MYSQL_ROOT_PASSWORD} << EOF
+# ETAPA 11: Instalar extensões PHP
+update_progress 11 "Instalando extensões PHP necessárias..."
+apt-get install -y php${PHP_VERSION} php${PHP_VERSION}-mysql php${PHP_VERSION}-gd php${PHP_VERSION}-mbstring php${PHP_VERSION}-bcmath php${PHP_VERSION}-xml php${PHP_VERSION}-ldap php${PHP_VERSION}-cli php${PHP_VERSION}-common >> "$LOG_FILE" 2>&1
+check_error "Falha na instalação do PHP e extensões"
+
+# ETAPA 12: Criar banco e usuário Zabbix
+update_progress 12 "Criando banco de dados e usuário do Zabbix..."
+mysql -uroot -p"${MYSQL_ROOT_PASSWORD}" --default-character-set=utf8mb4 << EOF
 CREATE DATABASE IF NOT EXISTS zabbix CHARACTER SET utf8mb4 COLLATE utf8mb4_bin;
 CREATE USER IF NOT EXISTS 'zabbix'@'localhost' IDENTIFIED BY '${ZABBIX_DB_PASSWORD}';
 GRANT ALL PRIVILEGES ON zabbix.* TO 'zabbix'@'localhost';
 FLUSH PRIVILEGES;
 EOF
-check_error "Falha ao criar banco de dados"
+check_error "Falha ao criar estrutura do banco de dados"
 
-update_progress 45 "Importando schema do Zabbix..."
-zcat /usr/share/zabbix-sql-scripts/mysql/server.sql.gz | mysql --default-character-set=utf8mb4 -uzabbix -p${ZABBIX_DB_PASSWORD} zabbix >> $LOG_FILE 2>&1
-check_error "Falha ao importar schema do Zabbix"
+# ETAPA 13: Importar estrutura inicial
+update_progress 13 "Importando esquema e dados iniciais do Zabbix..."
+zcat /usr/share/zabbix-sql-scripts/mysql/server.sql.gz | mysql -uzabbix -p"${ZABBIX_DB_PASSWORD}" --default-character-set=utf8mb4 zabbix >> "$LOG_FILE" 2>&1
+check_error "Falha ao importar dados para o banco"
 
-# ==============================================
-# ETAPA 5: Configuração do Zabbix (50-70%)
-# ==============================================
-update_progress 50 "Configurando Zabbix Server..."
-# Configurar senha do banco no zabbix_server.conf
-sed -i "s/# DBPassword=/DBPassword=${ZABBIX_DB_PASSWORD}/" /etc/zabbix/zabbix_server.conf
-# Configurar DBHost
-sed -i 's/# DBHost=localhost/DBHost=localhost/' /etc/zabbix/zabbix_server.conf
+# ETAPA 14: Configurar Zabbix Server
+update_progress 14 "Configurando arquivo principal do Zabbix Server..."
+if [ -f /etc/zabbix/zabbix_server.conf ]; then
+    sed -i "s/^# DBPassword=/DBPassword=${ZABBIX_DB_PASSWORD}/" /etc/zabbix/zabbix_server.conf
+    sed -i "s/^# DBHost=localhost/DBHost=localhost/" /etc/zabbix/zabbix_server.conf
+    sed -i "s/^# DBPort=3306/DBPort=3306/" /etc/zabbix/zabbix_server.conf
+else
+    check_error "Arquivo de configuração do Zabbix não encontrado"
+fi
 
-update_progress 55 "Configurando PHP e Timezone..."
-# Configurar PHP para Apache
+# ETAPA 15: Configurar PHP
+update_progress 15 "Ajustando configurações PHP (tempo, memória, fuso horário)..."
 cat > /etc/php/${PHP_VERSION}/apache2/conf.d/99-zabbix.ini << EOF
 max_execution_time = 300
 memory_limit = 256M
@@ -201,178 +234,154 @@ max_input_time = 300
 date.timezone = America/Sao_Paulo
 EOF
 
-# Configurar PHP para CLI
 cat > /etc/php/${PHP_VERSION}/cli/conf.d/99-zabbix.ini << EOF
 date.timezone = America/Sao_Paulo
 EOF
+check_error "Falha ao configurar arquivos do PHP"
 
-update_progress 60 "Configurando Apache para Zabbix..."
-# Garantir que o Apache carrega a configuração do Zabbix
+# ETAPA 16: Configurar Apache
+update_progress 16 "Habilitando configurações do Zabbix no Apache..."
 if [ -f /etc/zabbix/apache.conf ]; then
     ln -sf /etc/zabbix/apache.conf /etc/apache2/conf-available/zabbix.conf
-    a2enconf zabbix >> $LOG_FILE 2>&1
-fi
-
-# ==============================================
-# ETAPA 6: Inicialização dos Serviços (70-85%)
-# ==============================================
-update_progress 70 "Iniciando serviços..."
-systemctl restart zabbix-server zabbix-agent apache2 >> $LOG_FILE 2>&1
-systemctl enable zabbix-server zabbix-agent apache2 >> $LOG_FILE 2>&1
-
-update_progress 75 "Verificando status dos serviços..."
-sleep 3
-
-# Verificar se serviços estão rodando
-if systemctl is-active --quiet zabbix-server; then
-    update_progress 80 "✅ Zabbix Server está rodando"
+    a2enconf zabbix > /dev/null 2>&1
+    a2enmod rewrite > /dev/null 2>&1
 else
-    echo -e "${RED}❌ Zabbix Server não iniciou corretamente${NC}"
-    systemctl status zabbix-server >> $LOG_FILE
-    echo -e "${YELLOW}⚠️  Verifique o log: journalctl -u zabbix-server${NC}"
+    check_error "Arquivo de configuração do Apache para Zabbix não encontrado"
 fi
 
-if systemctl is-active --quiet mariadb; then
-    update_progress 82 "✅ MariaDB está rodando"
-fi
+# ETAPA 17: Iniciar e habilitar serviços
+update_progress 17 "Iniciando e habilitando serviços para inicialização automática..."
+systemctl restart zabbix-server zabbix-agent apache2 mariadb >> "$LOG_FILE" 2>&1
+systemctl enable zabbix-server zabbix-agent apache2 mariadb >> "$LOG_FILE" 2>&1
+check_error "Falha ao reiniciar serviços"
 
-if systemctl is-active --quiet apache2; then
-    update_progress 84 "✅ Apache2 está rodando"
-fi
+# Verificação rápida de status
+systemctl is-active --quiet zabbix-server || check_error "Zabbix Server não está em execução"
+systemctl is-active --quiet mariadb || check_error "MariaDB não está em execução"
+systemctl is-active --quiet apache2 || check_error "Apache não está em execução"
 
-# ==============================================
-# ETAPA 7: Configurações Finais (85-95%)
-# ==============================================
-update_progress 85 "Ajustando permissões..."
-chown -R www-data:www-data /etc/zabbix/
-chmod -R 755 /etc/zabbix/
-
-update_progress 88 "Configurando firewall..."
+# ETAPA 18: Configurar Firewall
+update_progress 18 "Configurando regras de firewall (portas necessárias)..."
 if command -v ufw &> /dev/null; then
-    ufw allow 80/tcp >> $LOG_FILE 2>&1
-    ufw allow 443/tcp >> $LOG_FILE 2>&1
-    ufw allow 10050/tcp >> $LOG_FILE 2>&1
-    ufw allow 10051/tcp >> $LOG_FILE 2>&1
-    update_progress 90 "✅ Firewall configurado"
+    ufw allow in "Apache Full" >> "$LOG_FILE" 2>&1
+    ufw allow 10050/tcp comment 'Zabbix Agent' >> "$LOG_FILE" 2>&1
+    ufw allow 10051/tcp comment 'Zabbix Server' >> "$LOG_FILE" 2>&1
+    ufw reload >> "$LOG_FILE" 2>&1
 fi
 
-update_progress 92 "Limpando arquivos temporários..."
-rm -rf $INSTALL_DIR
+# ETAPA 19: Limpeza e permissões
+update_progress 19 "Ajustando permissões e limpando arquivos temporários..."
+chown -R www-data:www-data /etc/zabbix/ /usr/share/zabbix/
+chmod -R 755 /etc/zabbix/ /usr/share/zabbix/
+rm -rf "$INSTALL_DIR"
 
-update_progress 95 "Finalizando instalação..."
+# ETAPA 20: Finalização
+update_progress 20 "Gerando relatório final e finalizando..."
+new_line
 
 # ==============================================
-# ETAPA 8: Informações Finais (95-100%)
+# EXIBIÇÃO DE RESULTADO FINAL
 # ==============================================
+
 # Obter IP do servidor
 SERVER_IP=$(hostname -I | awk '{print $1}')
-if [ -z "$SERVER_IP" ]; then
-    SERVER_IP="localhost"
-fi
+[ -z "$SERVER_IP" ] && SERVER_IP="127.0.0.1"
 
-# Criar arquivo de configuração com informações
+# Gerar arquivo de informações completas
 cat > /root/zabbix_info.txt << EOF
 ============================================
-INFORMAÇÕES DO ZABBIX 7.0 LTS
+📊 RELATÓRIO DE INSTALAÇÃO - ZABBIX 7.0 LTS
 ============================================
-URL de Acesso: http://$SERVER_IP/zabbix
-IP do Servidor: $SERVER_IP
+✅ Status: INSTALAÇÃO BEM-SUCEDIDA
+🗓️ Data: $(date '+%d/%m/%Y %H:%M:%S')
+🐧 Sistema: Ubuntu ${UBUNTU_VERSION}
+🗄️ Banco: MariaDB ${MARIADB_VERSION}
+🐘 PHP: ${PHP_VERSION}
 
-CREDENCIAIS DO BANCO DE DADOS:
-Banco: zabbix
-Usuário: zabbix
-Senha: $ZABBIX_DB_PASSWORD
+🔗 ACESSO:
+URL Web: http://${SERVER_IP}/zabbix
+IP Servidor: ${SERVER_IP}
 
-SENHA ROOT DO MYSQL/MARIADB:
-Senha: $MYSQL_ROOT_PASSWORD
+🔐 CREDENCIAIS:
+→ Interface Web:
+   Usuário: Admin
+   Senha: zabbix
 
-CREDENCIAIS DO ZABBIX (após configuração web):
-Usuário padrão: Admin
-Senha padrão: zabbix
+→ Banco de Dados:
+   Raiz MySQL: ${MYSQL_ROOT_PASSWORD}
+   Usuário Zabbix: zabbix
+   Senha Zabbix: ${ZABBIX_DB_PASSWORD}
 
-COMANDOS ÚTEIS:
-- Status Zabbix: systemctl status zabbix-server
-- Status MariaDB: systemctl status mariadb
-- Status Apache: systemctl status apache2
-- Log Zabbix: tail -f /var/log/zabbix/zabbix_server.log
-- Ver senhas: cat /root/.zabbix_passwords
-
-ARQUIVOS DE CONFIGURAÇÃO:
+⚙️ ARQUIVOS DE CONFIGURAÇÃO:
 - Zabbix Server: /etc/zabbix/zabbix_server.conf
-- PHP: /etc/php/$PHP_VERSION/apache2/conf.d/99-zabbix.ini
-- Apache Zabbix: /etc/apache2/conf-available/zabbix.conf
+- PHP: /etc/php/${PHP_VERSION}/apache2/conf.d/99-zabbix.ini
+- Apache: /etc/apache2/conf-available/zabbix.conf
 
-============================================
-INSTALAÇÃO CONCLUÍDA COM SUCESSO!
+📋 LOGS:
+- Instalação: ${LOG_FILE}
+- Zabbix Server: /var/log/zabbix/zabbix_server.log
+- Apache: /var/log/apache2/
 ============================================
 EOF
 
-update_progress 98 "Gerando relatório final..."
-update_progress 100 "✅ INSTALAÇÃO COMPLETA!"
-
+# Exibir mensagem final formatada
 new_line
 echo -e "${GREEN}╔════════════════════════════════════════════════════════════════╗${NC}"
-echo -e "${GREEN}║                    🎉 INSTALAÇÃO CONCLUÍDA! 🎉                   ║${NC}"
+echo -e "${GREEN}║                    🎉 INSTALAÇÃO CONCLUÍDA! 🎉                   ║"
 echo -e "${GREEN}╚════════════════════════════════════════════════════════════════╝${NC}"
 new_line
 
-# Exibir informações finais
-echo -e "${CYAN}📊 INFORMAÇÕES DO ZABBIX:${NC}"
+echo -e "${CYAN}📌 RESUMO DAS INFORMAÇÕES:${NC}"
 echo -e "${YELLOW}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
-echo -e "${GREEN}🌐 URL de Acesso: ${CYAN}http://$SERVER_IP/zabbix${NC}"
-echo -e "${GREEN}🖥️  IP do Servidor: ${CYAN}$SERVER_IP${NC}"
-echo -e "${GREEN}🗄️  Banco de Dados: ${CYAN}MariaDB 10.11${NC}"
+echo -e "${GREEN}🌐 Endereço Web: ${CYAN}http://${SERVER_IP}/zabbix${NC}"
+echo -e "${GREEN}🖥️  IP do Servidor: ${CYAN}${SERVER_IP}${NC}"
+echo -e "${GREEN}🗄️  Banco de Dados: ${CYAN}MariaDB ${MARIADB_VERSION}${NC}"
+echo -e "${GREEN}🐘 Versão PHP: ${CYAN}${PHP_VERSION}${NC}"
 echo -e "${YELLOW}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
 new_line
 
-echo -e "${CYAN}🔐 CREDENCIAIS DO ZABBIX (após configuração web):${NC}"
+echo -e "${CYAN}🔑 ACESSO PADRÃO:${NC}"
 echo -e "${GREEN}   Usuário: ${YELLOW}Admin${NC}"
 echo -e "${GREEN}   Senha: ${YELLOW}zabbix${NC}"
 new_line
 
-echo -e "${RED}⚠️  ATENÇÃO - CREDENCIAIS IMPORTANTES:${NC}"
-echo -e "${YELLOW}   As senhas foram salvas em: /root/.zabbix_passwords${NC}"
-echo -e "${YELLOW}   Execute: cat /root/.zabbix_passwords${NC}"
+echo -e "${RED}⚠️  IMPORTANTE:${NC}"
+echo -e "${YELLOW}   • Senhas salvas em: /root/.zabbix_passwords${NC}"
+echo -e "${YELLOW}   • Relatório completo: /root/zabbix_info.txt${NC}"
+echo -e "${YELLOW}   • Troque a senha padrão após o first login!${NC}"
 new_line
 
 echo -e "${CYAN}📝 PRÓXIMOS PASSOS:${NC}"
-echo -e "   1️⃣  Acesse: ${YELLOW}http://$SERVER_IP/zabbix${NC}"
-echo -e "   2️⃣  Clique em \"Next step\" até finalizar"
-echo -e "   3️⃣  Na tela do banco de dados, use:"
-echo -e "       ${YELLOW}Database: zabbix${NC}"
-echo -e "       ${YELLOW}User: zabbix${NC}"
-echo -e "       ${YELLOW}Password: $ZABBIX_DB_PASSWORD${NC}"
-echo -e "   4️⃣  Login padrão: ${YELLOW}Admin / zabbix${NC}"
+echo -e "   1️⃣  Acesse: ${YELLOW}http://${SERVER_IP}/zabbix${NC}"
+echo -e "   2️⃣  Avance pelos passos de configuração"
+echo -e "   3️⃣  No passo do banco, informe:"
+echo -e "       ${YELLOW}Servidor: localhost${NC}"
+echo -e "       ${YELLOW}Banco: zabbix${NC}"
+echo -e "       ${YELLOW}Usuário: zabbix${NC}"
+echo -e "       ${YELLOW}Senha: ${ZABBIX_DB_PASSWORD}${NC}"
 new_line
 
-echo -e "${GREEN}✅ Zabbix 7.0 LTS instalado com sucesso!${NC}"
-echo -e "${YELLOW}⚠️  Aguarde 1-2 minutos para todos os serviços inicializarem completamente${NC}"
-new_line
-
-# Perguntar se quer ver as senhas
-read -p "$(echo -e ${CYAN}"Deseja ver as senhas geradas agora? (s/N): "${NC})" -n 1 -r
+# Opções finais para o usuário
+read -p "$(echo -e ${CYAN}"Deseja exibir as senhas geradas agora? (s/N): "${NC})" -n 1 -r
 echo
 if [[ $REPLY =~ ^[Ss]$ ]]; then
     cat /root/.zabbix_passwords
     new_line
 fi
 
-# Perguntar se quer abrir a URL automaticamente
-read -p "$(echo -e ${CYAN}"Deseja abrir a URL no navegador? (s/N): "${NC})" -n 1 -r
+read -p "$(echo -e ${CYAN}"Deseja abrir o endereço web no navegador? (s/N): "${NC})" -n 1 -r
 echo
 if [[ $REPLY =~ ^[Ss]$ ]]; then
     if command -v xdg-open &> /dev/null; then
-        xdg-open "http://$SERVER_IP/zabbix" >> $LOG_FILE 2>&1
-        echo -e "${GREEN}🌐 Abrindo navegador...${NC}"
+        xdg-open "http://${SERVER_IP}/zabbix" > /dev/null 2>&1
+        echo -e "${GREEN}🌐 Abrindo interface web...${NC}"
     else
-        echo -e "${YELLOW}⚠️  Não foi possível abrir o navegador automaticamente${NC}"
-        echo -e "${GREEN}   Acesse manualmente: http://$SERVER_IP/zabbix${NC}"
+        echo -e "${YELLOW}⚠️  Navegador não detectado. Acesse manualmente:${NC}"
+        echo -e "${GREEN}   http://${SERVER_IP}/zabbix${NC}"
     fi
 fi
 
 new_line
-echo -e "${BLUE}✨ Script finalizado com sucesso! ✨${NC}"
-echo -e "${BLUE}📁 Informações completas em: /root/zabbix_info.txt${NC}"
-echo -e "${BLUE}🔑 Senhas em: /root/.zabbix_passwords${NC}"
+echo -e "${BLUE}✨ Script finalizado com sucesso em $(date '+%H:%M:%S')! ✨${NC}"
 
 exit 0
