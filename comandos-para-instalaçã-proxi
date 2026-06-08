@@ -1,0 +1,11 @@
+# Baixar o script
+wget https://raw.githubusercontent.com/afonsohenriqueb/zabbix-instalacao-automatica-ptbr.sh/refs/heads/main/install-zabbix-proxy-7.sh -O install-zabbix-proxy-7.sh
+
+# Verificar se o arquivo foi baixado
+ls -l install-zabbix-proxy-7.sh
+
+# Dar permissão
+chmod +x install-zabbix-proxy-7.sh
+
+# Executar
+./install-zabbix-proxy-7.sh
