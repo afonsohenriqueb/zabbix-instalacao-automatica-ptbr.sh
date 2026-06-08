@@ -193,29 +193,32 @@ etcdctl --cacert=${ETCD_CERT_DIR}/ca.crt \
         endpoint health > /dev/null 2>&1
 
 # --------------------------
-# ETAPA 6: Adicionar configuração HA no Zabbix com sed -i
+# ETAPA 6: Adicionar configuração HA no Zabbix com sed -i CORRIGIDO
 # --------------------------
 progress_bar 6 ${TOTAL_STEPS} "Adicionando configuração de HA no Zabbix"
 
 # Remove linhas antigas do HA se já existirem
-sed -i '/^ClusterHA=/d' ${ZABBIX_CONF}
-sed -i '/^ETCD_SERVERS=/d' ${ZABBIX_CONF}
-sed -i '/^ETCD_CA_FILE=/d' ${ZABBIX_CONF}
-sed -i '/^ETCD_CERT_FILE=/d' ${ZABBIX_CONF}
-sed -i '/^ETCD_KEY_FILE=/d' ${ZABBIX_CONF}
+sed -i '/^ClusterHA=/d' "${ZABBIX_CONF}"
+sed -i '/^ETCD_SERVERS=/d' "${ZABBIX_CONF}"
+sed -i '/^ETCD_CA_FILE=/d' "${ZABBIX_CONF}"
+sed -i '/^ETCD_CERT_FILE=/d' "${ZABBIX_CONF}"
+sed -i '/^ETCD_KEY_FILE=/d' "${ZABBIX_CONF}"
 
-# Adiciona apenas as novas linhas no FINAL do arquivo
-sed -i '$a\\n# ==============================================' ${ZABBIX_CONF}
-sed -i '$a# ALTA DISPONIBILIDADE - CONFIGURAÇÃO HA' ${ZABBIX_CONF}
-sed -i '$a# ==============================================' ${ZABBIX_CONF}
-sed -i "$a ClusterHA=1" ${ZABBIX_CONF}
-sed -i "$a ETCD_SERVERS=https://${SERVER_IP}:2379" ${ZABBIX_CONF}
-sed -i "$a ETCD_CA_FILE=${CERT_DIR}/ca.crt" ${ZABBIX_CONF}
-sed -i "$a ETCD_CERT_FILE=${CERT_DIR}/server.crt" ${ZABBIX_CONF}
-sed -i "$a ETCD_KEY_FILE=${CERT_DIR}/server.key" ${ZABBIX_CONF}
+# Adiciona apenas as novas linhas no FINAL do arquivo (formato corrigido)
+cat >> "${ZABBIX_CONF}" <<EOF
 
-chown zabbix:zabbix ${ZABBIX_CONF}
-chmod 640 ${ZABBIX_CONF}
+# ==============================================
+# ALTA DISPONIBILIDADE - CONFIGURAÇÃO HA
+# ==============================================
+ClusterHA=1
+ETCD_SERVERS=https://${SERVER_IP}:2379
+ETCD_CA_FILE=${CERT_DIR}/ca.crt
+ETCD_CERT_FILE=${CERT_DIR}/server.crt
+ETCD_KEY_FILE=${CERT_DIR}/server.key
+EOF
+
+chown zabbix:zabbix "${ZABBIX_CONF}"
+chmod 640 "${ZABBIX_CONF}"
 
 # --------------------------
 # ETAPA 7: Reiniciar Zabbix e verificar
