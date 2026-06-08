@@ -1,0 +1,9 @@
+# Baixar o script
+wget https://raw.githubusercontent.com/afonsohenriqueb/zabbix-instalacao-automatica-ptbr.sh/refs/heads/main/habilitar-zabbix-ha.sh -O habilitar-zabbix-ha.sh
+
+# Verificar se o arquivo foi baixado
+ls -l habilitar-zabbix-ha.sh
+
+# Dar permissão e executar
+chmod +x habilitar-zabbix-ha.sh
+./habilitar-zabbix-ha.sh
