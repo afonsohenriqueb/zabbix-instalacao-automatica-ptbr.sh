@@ -1,0 +1,4 @@
+wget https://raw.githubusercontent.com/afonsohenriqueb/zabbix-instalacao-automatica-ptbr.sh/refs/heads/main/instalador-zabbix-70-lts-mariadb.sh
+ls -l instalador-zabbix-70-lts-mariadb.sh
+chmod +x instalador-zabbix-70-lts-mariadb.sh
+sudo ./instalador-zabbix-70-lts-mariadb.sh
