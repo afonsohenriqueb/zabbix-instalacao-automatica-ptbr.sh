@@ -5,7 +5,7 @@
 # Compatibilidade: Ubuntu, Zorin OS, Mint, Pop!_OS e RHEL
 # Banco: MariaDB
 # Idioma Padrão: Inglês (en_US) | Disponível: pt_BR
-# Autor: Script Automatizado - Versão Atualizada
+# Autor: Script Automatizado - Versão Atualizada (corrigida)
 # ==============================================
 
 # Cores para output
@@ -22,6 +22,7 @@ MARIADB_VERSION="10.11"
 LOG_FILE="/var/log/zabbix_install.log"
 INSTALL_DIR="/tmp/zabbix_install"
 TOTAL_STEPS=16
+CRED_FILE="/root/.zabbix_credentials"
 
 # ==============================================
 # FUNÇÕES AUXILIARES
@@ -81,6 +82,18 @@ check_error() {
 
 new_line() {
     echo -e "\n"
+}
+
+# Aguarda o serviço do MariaDB realmente aceitar conexões antes de seguir
+wait_for_mariadb() {
+    local tries=30
+    for ((i=1; i<=tries; i++)); do
+        if mysqladmin ping --silent >/dev/null 2>&1; then
+            return 0
+        fi
+        sleep 1
+    done
+    return 1
 }
 
 # ==============================================
@@ -164,21 +177,23 @@ mkdir -p "$INSTALL_DIR"
 cd "$INSTALL_DIR" || exit 1
 > "$LOG_FILE"
 
-MYSQL_ROOT_PASSWORD=$(openssl rand -base64 20 | tr -d "=+/" | cut -c1-20)
-ZABBIX_DB_PASSWORD=$(openssl rand -base64 16 | tr -d "=+/" | cut -c1-16)
-
-cat > /root/.zabbix_passwords << EOF
-============================================
-🔐 SENHAS GERADAS - GUARDE COM SEGURANÇA!
-============================================
-MySQL Root: ${MYSQL_ROOT_PASSWORD}
---------------------------------------------
-Banco Zabbix:
-Usuário: zabbix
-Senha: ${ZABBIX_DB_PASSWORD}
-============================================
+# ==============================================
+# CREDENCIAIS: gera na primeira execução, reaproveita nas seguintes
+# ==============================================
+if [ -f "$CRED_FILE" ]; then
+    # shellcheck source=/dev/null
+    source "$CRED_FILE"
+    echo -e "${YELLOW}⚠️  Credenciais de uma execução anterior encontradas em ${CRED_FILE} — reaproveitando as mesmas senhas.${NC}"
+    new_line
+else
+    MYSQL_ROOT_PASSWORD=$(openssl rand -base64 20 | tr -d "=+/" | cut -c1-20)
+    ZABBIX_DB_PASSWORD=$(openssl rand -base64 16 | tr -d "=+/" | cut -c1-16)
+    cat > "$CRED_FILE" << EOF
+MYSQL_ROOT_PASSWORD='${MYSQL_ROOT_PASSWORD}'
+ZABBIX_DB_PASSWORD='${ZABBIX_DB_PASSWORD}'
 EOF
-chmod 600 /root/.zabbix_passwords
+    chmod 600 "$CRED_FILE"
+fi
 
 # ==============================================
 # ETAPAS DE INSTALAÇÃO
@@ -217,7 +232,17 @@ run_with_spinner "$PKG_INSTALL mariadb-server mariadb-client" "Baixando MariaDB 
 update_progress 6 "Iniciando e configurando segurança do Banco de Dados..."
 systemctl start mariadb >> "$LOG_FILE" 2>&1
 systemctl enable mariadb >> "$LOG_FILE" 2>&1
-mysql --defaults-file=/dev/null << EOF
+
+if ! wait_for_mariadb; then
+    echo -e "\n${RED}❌ ERRO: O serviço do MariaDB não respondeu a tempo.${NC}"
+    echo "[ERRO] MariaDB não respondeu a tempo" >> "$LOG_FILE"
+    exit 1
+fi
+
+# Detecta o estado atual do root: instalação nova (sem senha) x reexecução (senha já definida)
+if mysql -u root -e "SELECT 1;" >/dev/null 2>&1; then
+    # Root ainda sem senha -> primeira execução, faz o hardening normal
+    mysql -u root << EOF
 ALTER USER 'root'@'localhost' IDENTIFIED BY '${MYSQL_ROOT_PASSWORD}';
 DELETE FROM mysql.user WHERE User='';
 DELETE FROM mysql.user WHERE User='root' AND Host NOT IN ('localhost', '127.0.0.1', '::1');
@@ -225,6 +250,15 @@ DROP DATABASE IF EXISTS test;
 DELETE FROM mysql.db WHERE Db='test' OR Db='test\\_%';
 FLUSH PRIVILEGES;
 EOF
+    check_error "Falha ao configurar a senha inicial do root do MariaDB"
+elif mysql -u root -p"${MYSQL_ROOT_PASSWORD}" -e "SELECT 1;" >/dev/null 2>&1; then
+    # Root já está com a senha salva em CRED_FILE (execução anterior) -> nada a fazer
+    :
+else
+    echo -e "\n${RED}❌ ERRO: Não foi possível autenticar no MariaDB como root (nem sem senha, nem com a senha salva em ${CRED_FILE}).${NC}"
+    echo -e "${YELLOW}Se o MariaDB já foi configurado manualmente antes, redefina a senha do root ou remova ${CRED_FILE} e reinstale o MariaDB do zero.${NC}"
+    exit 1
+fi
 
 update_progress 7 "Instalando Zabbix Server, Frontend e Agente..."
 if [ "$OS_FAMILY" == "debian" ]; then
@@ -234,14 +268,20 @@ else
 fi
 
 update_progress 8 "Criando banco de dados do Zabbix..."
-run_with_spinner "mysql -uroot -p\"${MYSQL_ROOT_PASSWORD}\" -e \"CREATE DATABASE IF NOT EXISTS zabbix CHARACTER SET utf8mb4 COLLATE utf8mb4_bin; CREATE USER IF NOT EXISTS 'zabbix'@'localhost' IDENTIFIED BY '${ZABBIX_DB_PASSWORD}'; GRANT ALL PRIVILEGES ON zabbix.* TO 'zabbix'@'localhost'; FLUSH PRIVILEGES;\"" "Criando DB"
+run_with_spinner "mysql -uroot -p\"${MYSQL_ROOT_PASSWORD}\" -e \"CREATE DATABASE IF NOT EXISTS zabbix CHARACTER SET utf8mb4 COLLATE utf8mb4_bin; CREATE USER IF NOT EXISTS 'zabbix'@'localhost' IDENTIFIED BY '${ZABBIX_DB_PASSWORD}'; ALTER USER 'zabbix'@'localhost' IDENTIFIED BY '${ZABBIX_DB_PASSWORD}'; GRANT ALL PRIVILEGES ON zabbix.* TO 'zabbix'@'localhost'; FLUSH PRIVILEGES;\"" "Criando DB"
 
 update_progress 9 "Importando esquema de dados do Zabbix..."
 SQL_FILE="/usr/share/zabbix-sql-scripts/mysql/server.sql.gz"
-run_with_spinner "zcat $SQL_FILE | mysql -uzabbix -p\"${ZABBIX_DB_PASSWORD}\" zabbix" "Importando tabelas (Aguarde...)"
+ZBX_TABLE_COUNT=$(mysql -uzabbix -p"${ZABBIX_DB_PASSWORD}" -N -B -e "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema='zabbix';" 2>>"$LOG_FILE")
+if [ "${ZBX_TABLE_COUNT:-0}" -gt 0 ]; then
+    update_progress 9 "Esquema do Zabbix já existe no banco — pulando importação"
+else
+    run_with_spinner "zcat $SQL_FILE | mysql -uzabbix -p\"${ZABBIX_DB_PASSWORD}\" zabbix" "Importando tabelas (Aguarde...)"
+fi
 
 update_progress 10 "Configurando arquivo principal do Zabbix Server..."
 sed -i "s/^# DBPassword=/DBPassword=${ZABBIX_DB_PASSWORD}/" /etc/zabbix/zabbix_server.conf
+sed -i "s/^DBPassword=.*/DBPassword=${ZABBIX_DB_PASSWORD}/" /etc/zabbix/zabbix_server.conf
 sed -i "s/^# DBHost=localhost/DBHost=localhost/" /etc/zabbix/zabbix_server.conf
 
 update_progress 11 "Configurando PHP e Web Server..."
@@ -301,6 +341,20 @@ update_progress 16 "Gerando relatório final..."
 SERVER_IP=$(hostname -I | awk '{print $1}')
 [ -z "$SERVER_IP" ] && SERVER_IP="127.0.0.1"
 
+# Atualiza o arquivo de senhas em formato legível (sempre reflete o estado atual)
+cat > /root/.zabbix_passwords << EOF
+============================================
+🔐 SENHAS - GUARDE COM SEGURANÇA!
+============================================
+MySQL Root: ${MYSQL_ROOT_PASSWORD}
+--------------------------------------------
+Banco Zabbix:
+Usuário: zabbix
+Senha: ${ZABBIX_DB_PASSWORD}
+============================================
+EOF
+chmod 600 /root/.zabbix_passwords
+
 new_line
 echo -e "${GREEN}╔════════════════════════════════════════════════════════════════╗${NC}"
 echo -e "${GREEN}║                    🎉 INSTALAÇÃO CONCLUÍDA! 🎉                 ║"
@@ -313,12 +367,13 @@ echo -e "${YELLOW}━━━━━━━━━━━━━━━━━━━━�
 echo -e "${CYAN}🔑 ACESSO ZABBIX (WEB):${NC}"
 echo -e "${GREEN}   Usuário: ${YELLOW}Admin${NC}"
 echo -e "${GREEN}   Senha:   ${YELLOW}zabbix${NC}"
+echo -e "${YELLOW}   (troque essa senha padrão no primeiro login pela interface web)${NC}"
 echo -e "${YELLOW}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
 echo -e "${CYAN}🗄️  CREDENCIAIS DO BANCO DE DADOS:${NC}"
-echo -e "${GREEN}   Root MySQL: ${YELLOW}${MYSQL_ROOT_PASSWORD}${NC}"
-echo -e "${GREEN}   Usuário DB: ${YELLOW}zabbix${NC}"
-echo -e "${GREEN}   Senha DB:   ${YELLOW}${ZABBIX_DB_PASSWORD}${NC}"
-echo -e "${YELLOW}   *(Também salvo em: /root/.zabbix_passwords)*${NC}"
+echo -e "${GREEN}   Root MySQL:  ${YELLOW}${MYSQL_ROOT_PASSWORD}${NC}"
+echo -e "${GREEN}   Usuário DB:  ${YELLOW}zabbix${NC}"
+echo -e "${GREEN}   Senha DB:    ${YELLOW}${ZABBIX_DB_PASSWORD}${NC}"
+echo -e "${YELLOW}   *(Também salvo em: /root/.zabbix_passwords e ${CRED_FILE})*${NC}"
 new_line
 
 # ==============================================
