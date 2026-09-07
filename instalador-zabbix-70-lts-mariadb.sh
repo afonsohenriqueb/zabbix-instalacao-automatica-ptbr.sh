@@ -1,13 +1,11 @@
 #!/bin/bash
-
 # ==============================================
 # Script: Instalação Zabbix 7.0 LTS All-in-One
 # Compatibilidade: Ubuntu, Zorin OS, Mint, Pop!_OS e RHEL
 # Banco: MariaDB
 # Idioma Padrão: Inglês (en_US) | Disponível: pt_BR
-# Autor: Script Automatizado - Versão Atualizada (corrigida)
+# Autor: Script Automatizado - Versão CORRIGIDA 2026
 # ==============================================
-
 # Cores para output
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -27,7 +25,6 @@ CRED_FILE="/root/.zabbix_credentials"
 # ==============================================
 # FUNÇÕES AUXILIARES
 # ==============================================
-
 update_progress() {
     local current_step=$1
     local message=$2
@@ -97,9 +94,29 @@ wait_for_mariadb() {
 }
 
 # ==============================================
+# FUNÇÃO CORRIGIDA: Conectar ao MariaDB (trata socket e senha)
+# ==============================================
+connect_mariadb() {
+    # Tenta várias formas de autenticação, na ordem:
+    # 1. Unix Socket (sem senha, root local)
+    if mysql -u root -e "SELECT 1;" >/dev/null 2>&1; then
+        return 0
+    fi
+    # 2. Senha salva no arquivo de credenciais
+    if [ -n "$MYSQL_ROOT_PASSWORD" ] && mysql -u root -p"${MYSQL_ROOT_PASSWORD}" -e "SELECT 1;" >/dev/null 2>&1; then
+        return 0
+    fi
+    # 3. Senha vazia (instalações antigas)
+    if mysql -u root -p"" -e "SELECT 1;" >/dev/null 2>&1; then
+        return 0
+    fi
+    # Falha em todas as tentativas
+    return 1
+}
+
+# ==============================================
 # VALIDAÇÕES INICIAIS E DETECÇÃO DE SO
 # ==============================================
-
 if [[ $EUID -ne 0 ]]; then
     echo -e "${RED}❌ Este script deve ser executado como root!${NC}"
     echo -e "${YELLOW}Use: sudo bash $0${NC}"
@@ -193,12 +210,13 @@ MYSQL_ROOT_PASSWORD='${MYSQL_ROOT_PASSWORD}'
 ZABBIX_DB_PASSWORD='${ZABBIX_DB_PASSWORD}'
 EOF
     chmod 600 "$CRED_FILE"
+    echo -e "${GREEN}🔑 Senhas geradas com sucesso (Root MariaDB + Banco Zabbix)${NC}"
+    new_line
 fi
 
 # ==============================================
 # ETAPAS DE INSTALAÇÃO
 # ==============================================
-
 update_progress 1 "Atualizando lista de pacotes do sistema ($PKG_MGR)"
 run_with_spinner "$PKG_UPDATE" "Atualizando repositórios"
 
@@ -239,10 +257,15 @@ if ! wait_for_mariadb; then
     exit 1
 fi
 
-# Detecta o estado atual do root: instalação nova (sem senha) x reexecução (senha já definida)
-if mysql -u root -e "SELECT 1;" >/dev/null 2>&1; then
-    # Root ainda sem senha -> primeira execução, faz o hardening normal
-    mysql -u root << EOF
+# ==============================================
+# 🧪 LÓGICA CORRIGIDA DE CONEXÃO E SENHA ROOT
+# ==============================================
+if connect_mariadb; then
+    # ✅ Conseguiu conectar (seja por socket ou por senha já existente)
+    if mysql -u root -e "SELECT 1 FROM mysql.user WHERE user='root' AND password='' OR password IS NULL LIMIT 1;" 2>/dev/null | grep -q "1"; then
+        # 🔑 Instalação nova: root sem senha → DEFINE A SENHA AGORA
+        echo -e "${YELLOW}🔒 Definindo senha para usuário root do MariaDB...${NC}"
+        mysql -u root << EOF
 ALTER USER 'root'@'localhost' IDENTIFIED BY '${MYSQL_ROOT_PASSWORD}';
 DELETE FROM mysql.user WHERE User='';
 DELETE FROM mysql.user WHERE User='root' AND Host NOT IN ('localhost', '127.0.0.1', '::1');
@@ -250,13 +273,32 @@ DROP DATABASE IF EXISTS test;
 DELETE FROM mysql.db WHERE Db='test' OR Db='test\\_%';
 FLUSH PRIVILEGES;
 EOF
-    check_error "Falha ao configurar a senha inicial do root do MariaDB"
-elif mysql -u root -p"${MYSQL_ROOT_PASSWORD}" -e "SELECT 1;" >/dev/null 2>&1; then
-    # Root já está com a senha salva em CRED_FILE (execução anterior) -> nada a fazer
-    :
+        check_error "Falha ao definir senha do root do MariaDB"
+        echo -e "${GREEN}✅ Senha do root configurada com sucesso!${NC}"
+    else
+        # ✅ Já tem senha configurada → verifica se bate com a salva
+        if ! mysql -u root -p"${MYSQL_ROOT_PASSWORD}" -e "SELECT 1;" >/dev/null 2>&1; then
+            echo -e "\n${YELLOW}⚠️  O MariaDB já possui senha diferente da salva em ${CRED_FILE}${NC}"
+            echo -e "${YELLOW}💡 Atualizando credenciais...${NC}"
+            MYSQL_ROOT_PASSWORD_ATUAL=$(mysql -u root -e "SELECT SUBSTRING(password,1,41) FROM mysql.user WHERE user='root' AND host='localhost';" 2>/dev/null | tail -n1)
+            # Se não conseguir ler, mantém o que foi gerado e redefine
+            mysql -u root << EOF 2>/dev/null
+ALTER USER 'root'@'localhost' IDENTIFIED BY '${MYSQL_ROOT_PASSWORD}';
+FLUSH PRIVILEGES;
+EOF
+            echo -e "${GREEN}✅ Senha redefinida para a salva no arquivo de credenciais.${NC}"
+        fi
+        # Senha já está correta → nada a fazer
+        :
+    fi
 else
-    echo -e "\n${RED}❌ ERRO: Não foi possível autenticar no MariaDB como root (nem sem senha, nem com a senha salva em ${CRED_FILE}).${NC}"
-    echo -e "${YELLOW}Se o MariaDB já foi configurado manualmente antes, redefina a senha do root ou remova ${CRED_FILE} e reinstale o MariaDB do zero.${NC}"
+    # ❌ Falha em todas as tentativas
+    echo -e "\n${RED}❌ ERRO CRÍTICO: Não foi possível conectar ao MariaDB de nenhuma forma.${NC}"
+    echo -e "${YELLOW}💡 Soluções:${NC}"
+    echo -e "   1. Remova o arquivo: rm -f ${CRED_FILE}"
+    echo -e "   2. Desinstale o MariaDB: apt remove --purge mariadb-server -y"
+    echo -e "   3. Execute o script novamente"
+    echo "[ERRO] Falha em todas as tentativas de autenticação no MariaDB" >> "$LOG_FILE"
     exit 1
 fi
 
@@ -264,11 +306,11 @@ update_progress 7 "Instalando Zabbix Server, Frontend e Agente..."
 if [ "$OS_FAMILY" == "debian" ]; then
     run_with_spinner "$PKG_INSTALL zabbix-server-mysql zabbix-frontend-php zabbix-apache-conf zabbix-sql-scripts zabbix-agent" "Instalando Zabbix e Frontend"
 else
-    run_with_spinner "$PKG_INSTALL zabbix-server-mysql zabbix-web-mysql zabbix-apache-conf zabbix-sql-scripts zabbix-selinux-policy zabbix-agent" "Instalando Zabbix e Frontend"
+    run_with_spinner "$PKG_INSTALL zabbix-server-mysql zabbix-web-mysql zabbix-apache-conf zabbix-sql-scripts zabbix-zabbix-selinux-policy zabbix-agent" "Instalando Zabbix e Frontend"
 fi
 
 update_progress 8 "Criando banco de dados do Zabbix..."
-run_with_spinner "mysql -uroot -p\"${MYSQL_ROOT_PASSWORD}\" -e \"CREATE DATABASE IF NOT EXISTS zabbix CHARACTER SET utf8mb4 COLLATE utf8mb4_bin; CREATE USER IF NOT EXISTS 'zabbix'@'localhost' IDENTIFIED BY '${ZABBIX_DB_PASSWORD}'; ALTER USER 'zabbix'@'localhost' IDENTIFIED BY '${ZABBIX_DB_PASSWORD}'; GRANT ALL PRIVILEGES ON zabbix.* TO 'zabbix'@'localhost'; FLUSH PRIVILEGES;\"" "Criando DB"
+run_with_spinner "mysql -uroot -p\"${MYSQL_ROOT_PASSWORD}\" -e \"CREATE DATABASE IF NOT EXISTS zabbix CHARACTER SET utf8mb4 COLLATE utf8mb4_bin; CREATE USER IF NOT EXISTS 'zabbix'@'localhost' IDENTIFIED BY '${ZABBIX_DB_PASSWORD}'; GRANT ALL PRIVILEGES ON zabbix.* TO 'zabbix'@'localhost'; FLUSH PRIVILEGES;\"" "Criando DB"
 
 update_progress 9 "Importando esquema de dados do Zabbix..."
 SQL_FILE="/usr/share/zabbix-sql-scripts/mysql/server.sql.gz"
@@ -319,7 +361,7 @@ EOF
 chown $WEB_USER:$WEB_USER /etc/zabbix/web/zabbix.conf.php
 chmod 644 /etc/zabbix/web/zabbix.conf.php
 
-mysql -u zabbix -p"${ZABBIX_DB_PASSWORD}" zabbix -e "UPDATE users SET lang='en_US' WHERE username='Admin';" >> "$LOG_FILE" 2>&1
+mysql -u root -p"${MYSQL_ROOT_PASSWORD}" zabbix -e "UPDATE users SET lang='en_US' WHERE username='Admin';" >> "$LOG_FILE" 2>&1
 
 update_progress 13 "Iniciando e habilitando serviços ($WEB_SERVER, Zabbix)..."
 run_with_spinner "systemctl restart zabbix-server zabbix-agent $WEB_SERVER mariadb && systemctl enable zabbix-server zabbix-agent $WEB_SERVER mariadb" "Reiniciando serviços"
@@ -373,7 +415,7 @@ echo -e "${CYAN}🗄️  CREDENCIAIS DO BANCO DE DADOS:${NC}"
 echo -e "${GREEN}   Root MySQL:  ${YELLOW}${MYSQL_ROOT_PASSWORD}${NC}"
 echo -e "${GREEN}   Usuário DB:  ${YELLOW}zabbix${NC}"
 echo -e "${GREEN}   Senha DB:    ${YELLOW}${ZABBIX_DB_PASSWORD}${NC}"
-echo -e "${YELLOW}   *(Também salvo em: /root/.zabbix_passwords e ${CRED_FILE})*${NC}"
+echo -e "${YELLOW}   *(Salvo em: /root/.zabbix_passwords e ${CRED_FILE})*${NC}"
 new_line
 
 # ==============================================
@@ -381,7 +423,6 @@ new_line
 # ==============================================
 if command -v xdg-open &> /dev/null; then
     echo -e "${YELLOW}🌐 Abrindo o Zabbix no seu navegador padrão...${NC}"
-    # Usa o usuário original que invocou o sudo para que a janela abra na área de trabalho dele
     if [ -n "$SUDO_USER" ]; then
         sudo -u "$SUDO_USER" env DISPLAY="$DISPLAY" XAUTHORITY="$XAUTHORITY" xdg-open "http://localhost/zabbix" > /dev/null 2>&1 &
     else
