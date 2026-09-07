@@ -99,6 +99,11 @@ if [ -f /etc/os-release ]; then
     OS=$ID
     OS_VERSION_ID=$VERSION_ID
     
+    # Previne que sistemas baseados em debian fiquem sem a variável de codinome
+    if [ -z "$UBUNTU_CODENAME" ] && [ -n "$VERSION_CODENAME" ]; then
+        UBUNTU_CODENAME=$VERSION_CODENAME
+    fi
+    
     # Adaptação especial para Zorin OS, Mint e derivados do Ubuntu
     if [[ "$ID_LIKE" == *"ubuntu"* || "$ID_LIKE" == *"debian"* || "$OS" == "zorin" || "$OS" == "ubuntu" ]]; then
         OS_FAMILY="debian"
@@ -199,7 +204,13 @@ else
 fi
 
 update_progress 4 "Adicionando repositório oficial do MariaDB..."
-run_with_spinner "curl -LsS https://r.mariadb.com/downloads/mariadb_repo_setup | bash -s -- --mariadb-server-version=${MARIADB_VERSION}" "Configurando repositório MariaDB"
+if [ "$OS_FAMILY" == "debian" ]; then
+    # Injeta a base do Ubuntu (ex: noble, jammy) para que o MariaDB reconheça sistemas derivados
+    MARIADB_OS_FLAG="--os-type=ubuntu --os-version=${UBUNTU_CODENAME:-noble}"
+    run_with_spinner "curl -LsS https://r.mariadb.com/downloads/mariadb_repo_setup | bash -s -- --mariadb-server-version=${MARIADB_VERSION} $MARIADB_OS_FLAG" "Configurando repositório MariaDB"
+else
+    run_with_spinner "curl -LsS https://r.mariadb.com/downloads/mariadb_repo_setup | bash -s -- --mariadb-server-version=${MARIADB_VERSION}" "Configurando repositório MariaDB"
+fi
 
 update_progress 5 "Instalando servidor e cliente MariaDB..."
 run_with_spinner "$PKG_INSTALL mariadb-server mariadb-client" "Baixando MariaDB (Isso pode demorar um pouco)"
