@@ -2,11 +2,10 @@
 
 # ==============================================
 # Script: Instalação Zabbix 7.0 LTS All-in-One
-# Banco: MariaDB (última versão estável)
-# Idioma Padrão: Inglês (en_US)
-# Idioma Disponível: Português-Brasil (pt_BR)
+# Compatibilidade: Ubuntu, Zorin OS, Mint, Pop!_OS e RHEL
+# Banco: MariaDB
+# Idioma Padrão: Inglês (en_US) | Disponível: pt_BR
 # Autor: Script Automatizado - Versão Atualizada
-# Versão: 3.2 - IDIOMA INGLÊS PADRÃO + PT-BR DISPONÍVEL
 # ==============================================
 
 # Cores para output
@@ -19,11 +18,10 @@ NC='\033[0m' # Sem cor
 
 # Variáveis de configuração
 ZBX_VERSION="7.0"
-PHP_VERSION="8.3"
 MARIADB_VERSION="10.11"
 LOG_FILE="/var/log/zabbix_install.log"
 INSTALL_DIR="/tmp/zabbix_install"
-TOTAL_STEPS=21
+TOTAL_STEPS=16
 
 # ==============================================
 # FUNÇÕES AUXILIARES
@@ -39,16 +37,44 @@ update_progress() {
     for ((i=0; i<filled; i++)); do bar+="█"; done
     for ((i=0; i<empty; i++)); do bar+="░"; done
     bar+="]"
-    echo -ne "\r${CYAN}${bar} ${GREEN}${percent}% ${NC}- ${message}"
+    echo -e "${CYAN}${bar} ${GREEN}${percent}% ${NC}- ${message}"
     echo "[$(date '+%Y-%m-%d %H:%M:%S')] [${percent}%] ${message}" >> "$LOG_FILE"
+}
+
+run_with_spinner() {
+    local command="$1"
+    local message="$2"
+    
+    echo -n -e "${YELLOW}⏳ Processando: ${message}... ${NC}"
+    
+    eval "$command" >> "$LOG_FILE" 2>&1 &
+    local pid=$!
+    
+    local spinstr='|/-\'
+    while [ "$(ps a | awk '{print $1}' | grep "^$pid$")" ]; do
+        local temp=${spinstr#?}
+        printf " [%c]  " "$spinstr"
+        local spinstr=$temp${spinstr%"$temp"}
+        sleep 0.1
+        printf "\b\b\b\b\b\b"
+    done
+    
+    wait $pid
+    local status=$?
+    
+    if [ $status -eq 0 ]; then
+        echo -e "\b\b\b\b\b\b${GREEN}✅ Concluído!${NC}      "
+    else
+        echo -e "\b\b\b\b\b\b${RED}❌ ERRO!${NC}         "
+        echo -e "${YELLOW}⚠️ Verifique o log completo em: $LOG_FILE${NC}"
+        exit 1
+    fi
 }
 
 check_error() {
     if [ $? -ne 0 ]; then
         echo -e "\n${RED}❌ ERRO: $1${NC}"
         echo "[ERRO] $1" >> "$LOG_FILE"
-        echo -e "${YELLOW}⚠️  Verifique o log completo em: $LOG_FILE${NC}"
-        echo -e "${YELLOW}💡 Dica: Execute 'journalctl -xe' para detalhes do sistema${NC}"
         exit 1
     fi
 }
@@ -58,7 +84,7 @@ new_line() {
 }
 
 # ==============================================
-# VALIDAÇÕES INICIAIS
+# VALIDAÇÕES INICIAIS E DETECÇÃO DE SO
 # ==============================================
 
 if [[ $EUID -ne 0 ]]; then
@@ -67,11 +93,49 @@ if [[ $EUID -ne 0 ]]; then
     exit 1
 fi
 
-UBUNTU_VERSION=$(lsb_release -rs)
-UBUNTU_CODENAME=$(lsb_release -sc)
-if [[ ! "$UBUNTU_VERSION" =~ ^(22.04|24.04)$ ]]; then
-    echo -e "${RED}❌ Este script funciona APENAS no Ubuntu 22.04 ou 24.04${NC}"
-    echo -e "${YELLOW}Versão detectada: $UBUNTU_VERSION${NC}"
+# Detectar Sistema Operacional e mapear Zorin/Mint/PopOS para Ubuntu
+if [ -f /etc/os-release ]; then
+    . /etc/os-release
+    OS=$ID
+    OS_VERSION_ID=$VERSION_ID
+    
+    # Adaptação especial para Zorin OS, Mint e derivados do Ubuntu
+    if [[ "$ID_LIKE" == *"ubuntu"* || "$ID_LIKE" == *"debian"* || "$OS" == "zorin" || "$OS" == "ubuntu" ]]; then
+        OS_FAMILY="debian"
+        OS="ubuntu" # Força o nome para o repositório do Zabbix reconhecer
+        
+        # Traduz o Codinome do Zorin/Mint para a versão numérica base do Ubuntu
+        if [ -n "$UBUNTU_CODENAME" ]; then
+            case "$UBUNTU_CODENAME" in
+                noble) OS_VERSION_ID="24.04" ;;
+                jammy) OS_VERSION_ID="22.04" ;;
+                focal) OS_VERSION_ID="20.04" ;;
+                bionic) OS_VERSION_ID="18.04" ;;
+                *) OS_VERSION_ID="24.04" ;; # Fallback padrão
+            esac
+        fi
+        
+        PKG_MGR="apt-get"
+        PKG_UPDATE="apt-get update -y"
+        PKG_INSTALL="apt-get install -y"
+        WEB_SERVER="apache2"
+        WEB_USER="www-data"
+        PHP_INI_PATH="/etc/php/*/apache2/php.ini"
+        
+    elif [[ "$OS" =~ ^(centos|rhel|almalinux|rocky)$ ]]; then
+        OS_FAMILY="rhel"
+        PKG_MGR="dnf"
+        PKG_UPDATE="dnf makecache"
+        PKG_INSTALL="dnf install -y"
+        WEB_SERVER="httpd"
+        WEB_USER="apache"
+        PHP_INI_PATH="/etc/php.ini"
+    else
+        echo -e "${RED}❌ Sistema Operacional '$PRETTY_NAME' não é suportado por este script.${NC}"
+        exit 1
+    fi
+else
+    echo -e "${RED}❌ Arquivo /etc/os-release não encontrado.${NC}"
     exit 1
 fi
 
@@ -79,17 +143,17 @@ clear
 echo -e "${CYAN}"
 echo "╔══════════════════════════════════════════════════════════╗"
 echo "║                                                          ║"
-echo "║     🚀 INSTALADOR AUTOMÁTICO ZABBIX 7.0 LTS 🚀          ║"
+echo "║     🚀 INSTALADOR UNIVERSAL ZABBIX 7.0 LTS 🚀            ║"
 echo "║                                                          ║"
-echo "║          All-in-One com MariaDB ${MARIADB_VERSION} + PHP ${PHP_VERSION}          ║"
-echo "║          Idioma Padrão: Inglês | Disponível: PT-BR       ║"
+echo "║     All-in-One com MariaDB + Apache + PHP                ║"
+echo "║     Suporte: Ubuntu, Zorin OS, Mint, Pop!_OS, etc.       ║"
 echo "╚══════════════════════════════════════════════════════════╝"
 echo -e "${NC}"
 echo -e "${YELLOW}📋 Log da instalação: $LOG_FILE${NC}"
-echo -e "${YELLOW}⏱️  Tempo estimado: 5-10 minutos${NC}"
-echo -e "${YELLOW}🐧 Sistema detectado: Ubuntu $UBUNTU_VERSION ($UBUNTU_CODENAME)${NC}"
+echo -e "${YELLOW}⏱️  Tempo estimado: 5-15 minutos (dependendo da internet)${NC}"
+echo -e "${YELLOW}🐧 Sistema detectado: $PRETTY_NAME (Base: Ubuntu $OS_VERSION_ID)${NC}"
 new_line
-sleep 2
+sleep 3
 
 mkdir -p "$INSTALL_DIR"
 cd "$INSTALL_DIR" || exit 1
@@ -110,46 +174,37 @@ Senha: ${ZABBIX_DB_PASSWORD}
 ============================================
 EOF
 chmod 600 /root/.zabbix_passwords
-chown root:root /root/.zabbix_passwords
 
 # ==============================================
 # ETAPAS DE INSTALAÇÃO
 # ==============================================
 
-update_progress 1 "Atualizando lista de pacotes do sistema..."
-apt-get update -y >> "$LOG_FILE" 2>&1
-check_error "Falha ao atualizar repositórios"
+update_progress 1 "Atualizando lista de pacotes do sistema ($PKG_MGR)"
+run_with_spinner "$PKG_UPDATE" "Atualizando repositórios"
 
-update_progress 2 "Atualizando pacotes instalados..."
-apt-get upgrade -y >> "$LOG_FILE" 2>&1
-check_error "Falha ao atualizar sistema"
+update_progress 2 "Instalando ferramentas básicas..."
+if [ "$OS_FAMILY" == "debian" ]; then
+    run_with_spinner "$PKG_INSTALL wget curl gnupg apt-transport-https software-properties-common lsb-release locales" "Baixando dependências"
+else
+    run_with_spinner "$PKG_INSTALL wget curl epel-release" "Baixando dependências"
+fi
 
-update_progress 3 "Instalando ferramentas e dependências..."
-apt-get install -y wget curl gnupg apt-transport-https software-properties-common openssl lsb-release locales >> "$LOG_FILE" 2>&1
-check_error "Falha ao instalar dependências"
+update_progress 3 "Adicionando repositório oficial do Zabbix..."
+if [ "$OS_FAMILY" == "debian" ]; then
+    ZBX_URL="https://repo.zabbix.com/zabbix/${ZBX_VERSION}/${OS}/pool/main/z/zabbix-release/zabbix-release_${ZBX_VERSION}-1+${OS}${OS_VERSION_ID}_all.deb"
+    run_with_spinner "wget -q $ZBX_URL -O zabbix-release.deb && dpkg -i zabbix-release.deb && apt-get update" "Configurando repositório Zabbix"
+else
+    ZBX_URL="https://repo.zabbix.com/zabbix/${ZBX_VERSION}/${OS}/${OS_VERSION_ID%%.*}/x86_64/zabbix-release-${ZBX_VERSION}-1.el${OS_VERSION_ID%%.*}.noarch.rpm"
+    run_with_spinner "rpm -Uvh $ZBX_URL && dnf clean all" "Configurando repositório Zabbix"
+fi
 
 update_progress 4 "Adicionando repositório oficial do MariaDB..."
-curl -LsS https://r.mariadb.com/downloads/mariadb_repo_setup | bash -s -- --mariadb-server-version="${MARIADB_VERSION}" >> "$LOG_FILE" 2>&1
-check_error "Falha ao configurar repositório MariaDB"
+run_with_spinner "curl -LsS https://r.mariadb.com/downloads/mariadb_repo_setup | bash -s -- --mariadb-server-version=${MARIADB_VERSION}" "Configurando repositório MariaDB"
 
-update_progress 5 "Adicionando repositório oficial do Zabbix..."
-wget -q "https://repo.zabbix.com/zabbix/${ZBX_VERSION}/ubuntu/pool/main/z/zabbix-release/zabbix-release_${ZBX_VERSION}-1+ubuntu${UBUNTU_VERSION}_all.deb" >> "$LOG_FILE" 2>&1
-dpkg -i "zabbix-release_${ZBX_VERSION}-1+ubuntu${UBUNTU_VERSION}_all.deb" >> "$LOG_FILE" 2>&1
-check_error "Falha ao instalar pacote de repositório Zabbix"
+update_progress 5 "Instalando servidor e cliente MariaDB..."
+run_with_spinner "$PKG_INSTALL mariadb-server mariadb-client" "Baixando MariaDB (Isso pode demorar um pouco)"
 
-update_progress 6 "Adicionando repositório PHP ${PHP_VERSION}..."
-add-apt-repository -y ppa:ondrej/php >> "$LOG_FILE" 2>&1
-check_error "Falha ao adicionar repositório PHP"
-
-update_progress 7 "Atualizando repositórios com novas fontes..."
-apt-get update -y >> "$LOG_FILE" 2>&1
-check_error "Falha na atualização pós-repositórios"
-
-update_progress 8 "Instalando servidor e cliente MariaDB..."
-apt-get install -y mariadb-server mariadb-client >> "$LOG_FILE" 2>&1
-check_error "Falha na instalação do MariaDB"
-
-update_progress 9 "Aplicando configurações de segurança do banco..."
+update_progress 6 "Iniciando e configurando segurança do Banco de Dados..."
 systemctl start mariadb >> "$LOG_FILE" 2>&1
 systemctl enable mariadb >> "$LOG_FILE" 2>&1
 mysql --defaults-file=/dev/null << EOF
@@ -160,200 +215,109 @@ DROP DATABASE IF EXISTS test;
 DELETE FROM mysql.db WHERE Db='test' OR Db='test\\_%';
 FLUSH PRIVILEGES;
 EOF
-check_error "Falha na configuração segura do MariaDB"
 
-update_progress 10 "Instalando Zabbix Server, Frontend e Agente..."
-apt-get install -y zabbix-server-mysql zabbix-frontend-php zabbix-apache-conf zabbix-sql-scripts zabbix-agent >> "$LOG_FILE" 2>&1
-check_error "Falha na instalação dos pacotes Zabbix"
-
-update_progress 11 "Instalando extensões PHP necessárias..."
-apt-get install -y php${PHP_VERSION} php${PHP_VERSION}-mysql php${PHP_VERSION}-gd php${PHP_VERSION}-mbstring php${PHP_VERSION}-bcmath php${PHP_VERSION}-xml php${PHP_VERSION}-ldap php${PHP_VERSION}-cli php${PHP_VERSION}-common >> "$LOG_FILE" 2>&1
-check_error "Falha na instalação do PHP e extensões"
-
-update_progress 12 "Criando banco de dados e usuário do Zabbix..."
-mysql -uroot -p"${MYSQL_ROOT_PASSWORD}" --default-character-set=utf8mb4 << EOF
-CREATE DATABASE IF NOT EXISTS zabbix CHARACTER SET utf8mb4 COLLATE utf8mb4_bin;
-CREATE USER IF NOT EXISTS 'zabbix'@'localhost' IDENTIFIED BY '${ZABBIX_DB_PASSWORD}';
-GRANT ALL PRIVILEGES ON zabbix.* TO 'zabbix'@'localhost';
-FLUSH PRIVILEGES;
-EOF
-check_error "Falha ao criar estrutura do banco de dados"
-
-update_progress 13 "Importando esquema e dados iniciais do Zabbix..."
-zcat /usr/share/zabbix-sql-scripts/mysql/server.sql.gz | mysql -uzabbix -p"${ZABBIX_DB_PASSWORD}" --default-character-set=utf8mb4 zabbix >> "$LOG_FILE" 2>&1
-check_error "Falha ao importar dados para o banco"
-
-update_progress 14 "Configurando arquivo principal do Zabbix Server..."
-if [ -f /etc/zabbix/zabbix_server.conf ]; then
-    sed -i "s/^# DBPassword=/DBPassword=${ZABBIX_DB_PASSWORD}/" /etc/zabbix/zabbix_server.conf
-    sed -i "s/^# DBHost=localhost/DBHost=localhost/" /etc/zabbix/zabbix_server.conf
-    sed -i "s/^# DBPort=3306/DBPort=3306/" /etc/zabbix/zabbix_server.conf
+update_progress 7 "Instalando Zabbix Server, Frontend e Agente..."
+if [ "$OS_FAMILY" == "debian" ]; then
+    run_with_spinner "$PKG_INSTALL zabbix-server-mysql zabbix-frontend-php zabbix-apache-conf zabbix-sql-scripts zabbix-agent" "Instalando Zabbix e Frontend"
 else
-    check_error "Arquivo de configuração do Zabbix não encontrado"
+    run_with_spinner "$PKG_INSTALL zabbix-server-mysql zabbix-web-mysql zabbix-apache-conf zabbix-sql-scripts zabbix-selinux-policy zabbix-agent" "Instalando Zabbix e Frontend"
 fi
 
-update_progress 15 "Ajustando configurações PHP (tempo, memória, fuso horário)..."
-cat > /etc/php/${PHP_VERSION}/apache2/conf.d/99-zabbix.ini << EOF
-max_execution_time = 300
-memory_limit = 256M
-post_max_size = 16M
-upload_max_filesize = 2M
-max_input_time = 300
-date.timezone = America/Sao_Paulo
-EOF
+update_progress 8 "Criando banco de dados do Zabbix..."
+run_with_spinner "mysql -uroot -p\"${MYSQL_ROOT_PASSWORD}\" -e \"CREATE DATABASE IF NOT EXISTS zabbix CHARACTER SET utf8mb4 COLLATE utf8mb4_bin; CREATE USER IF NOT EXISTS 'zabbix'@'localhost' IDENTIFIED BY '${ZABBIX_DB_PASSWORD}'; GRANT ALL PRIVILEGES ON zabbix.* TO 'zabbix'@'localhost'; FLUSH PRIVILEGES;\"" "Criando DB"
 
-cat > /etc/php/${PHP_VERSION}/cli/conf.d/99-zabbix.ini << EOF
-date.timezone = America/Sao_Paulo
-EOF
-check_error "Falha ao configurar arquivos do PHP"
+update_progress 9 "Importando esquema de dados do Zabbix..."
+SQL_FILE="/usr/share/zabbix-sql-scripts/mysql/server.sql.gz"
+run_with_spinner "zcat $SQL_FILE | mysql -uzabbix -p\"${ZABBIX_DB_PASSWORD}\" zabbix" "Importando tabelas (Aguarde...)"
 
-update_progress 16 "Corrigindo configuração do Apache..."
-echo "ServerName zabbixserver" | tee /etc/apache2/conf-available/servername.conf >> "$LOG_FILE" 2>&1
-a2enconf servername >> "$LOG_FILE" 2>&1
-if [ -f /etc/zabbix/apache.conf ]; then
-    ln -sf /etc/zabbix/apache.conf /etc/apache2/conf-available/zabbix.conf
-    a2enconf zabbix > /dev/null 2>&1
-    a2enmod rewrite > /dev/null 2>&1
-else
-    check_error "Arquivo de configuração do Apache para Zabbix não encontrado"
+update_progress 10 "Configurando arquivo principal do Zabbix Server..."
+sed -i "s/^# DBPassword=/DBPassword=${ZABBIX_DB_PASSWORD}/" /etc/zabbix/zabbix_server.conf
+sed -i "s/^# DBHost=localhost/DBHost=localhost/" /etc/zabbix/zabbix_server.conf
+
+update_progress 11 "Configurando PHP e Web Server..."
+ACTUAL_PHP_INI=$(ls $PHP_INI_PATH 2>/dev/null | head -n 1)
+if [ -n "$ACTUAL_PHP_INI" ]; then
+    sed -i 's/^max_execution_time.*/max_execution_time = 300/' "$ACTUAL_PHP_INI"
+    sed -i 's/^memory_limit.*/memory_limit = 256M/' "$ACTUAL_PHP_INI"
+    sed -i 's/^post_max_size.*/post_max_size = 16M/' "$ACTUAL_PHP_INI"
+    sed -i 's/^upload_max_filesize.*/upload_max_filesize = 2M/' "$ACTUAL_PHP_INI"
+    sed -i 's/^max_input_time.*/max_input_time = 300/' "$ACTUAL_PHP_INI"
+    sed -i 's|^;date.timezone.*|date.timezone = America/Sao_Paulo|' "$ACTUAL_PHP_INI"
 fi
 
-# ==============================================
-# 🆕 CONFIGURAÇÃO DE IDIOMAS
-# ==============================================
-update_progress 17 "Configurando idiomas: Inglês padrão + PT-BR disponível..."
+update_progress 12 "Configurando idiomas do Frontend (Inglês e PT-BR)..."
+if [ "$OS_FAMILY" == "debian" ]; then
+    locale-gen en_US.UTF-8 pt_BR.UTF-8 >> "$LOG_FILE" 2>&1
+    update-locale LANG=en_US.UTF-8 >> "$LOG_FILE" 2>&1
+fi
 
-# Gerar locales do sistema para garantir suporte aos dois idiomas
-locale-gen en_US.UTF-8 pt_BR.UTF-8 >> "$LOG_FILE" 2>&1
-update-locale LANG=en_US.UTF-8 >> "$LOG_FILE" 2>&1
-
-# Criar arquivo de configuração com INGLÊS como padrão
 cat > /etc/zabbix/web/zabbix.conf.php << EOF
 <?php
 // Arquivo gerado automaticamente
-\$DB['TYPE']                     = 'MYSQL';
-\$DB['SERVER']                   = 'localhost';
-\$DB['PORT']                     = '0';
-\$DB['DATABASE']                 = 'zabbix';
-\$DB['USER']                     = 'zabbix';
-\$DB['PASSWORD']                 = '${ZABBIX_DB_PASSWORD}';
-\$DB['SCHEMA']                   = '';
-\$DB['ENCRYPTION']               = false;
-\$ZBX_SERVER_NAME                = 'zabbixserver';
-\$IMAGE_FORMAT_DEFAULT   = IMAGE_FORMAT_PNG;
-
-// IDIOMA PADRÃO DO SISTEMA
-// Disponíveis: en_US (Inglês), pt_BR (Português Brasil), en_GB
+\$DB['TYPE']     = 'MYSQL';
+\$DB['SERVER']   = 'localhost';
+\$DB['PORT']     = '0';
+\$DB['DATABASE'] = 'zabbix';
+\$DB['USER']     = 'zabbix';
+\$DB['PASSWORD'] = '${ZABBIX_DB_PASSWORD}';
+\$DB['SCHEMA']   = '';
+\$DB['ENCRYPTION'] = false;
+\$ZBX_SERVER_NAME = 'Zabbix Server';
+\$IMAGE_FORMAT_DEFAULT = IMAGE_FORMAT_PNG;
 \$DEFAULT_LANG = 'en_US';
 EOF
-
-chown www-data:www-data /etc/zabbix/web/zabbix.conf.php
+chown $WEB_USER:$WEB_USER /etc/zabbix/web/zabbix.conf.php
 chmod 644 /etc/zabbix/web/zabbix.conf.php
 
-# Define também o idioma do usuário Admin como inglês inicialmente
 mysql -u zabbix -p"${ZABBIX_DB_PASSWORD}" zabbix -e "UPDATE users SET lang='en_US' WHERE username='Admin';" >> "$LOG_FILE" 2>&1
 
-check_error "Falha ao configurar idiomas"
+update_progress 13 "Iniciando e habilitando serviços ($WEB_SERVER, Zabbix)..."
+run_with_spinner "systemctl restart zabbix-server zabbix-agent $WEB_SERVER mariadb && systemctl enable zabbix-server zabbix-agent $WEB_SERVER mariadb" "Reiniciando serviços"
 
-# ==============================================
-# CONTINUAÇÃO DO SCRIPT
-# ==============================================
-
-update_progress 18 "Iniciando e habilitando serviços..."
-systemctl restart zabbix-server zabbix-agent apache2 mariadb >> "$LOG_FILE" 2>&1
-systemctl enable zabbix-server zabbix-agent apache2 mariadb >> "$LOG_FILE" 2>&1
-check_error "Falha ao reiniciar serviços"
-
-systemctl is-active --quiet zabbix-server || check_error "Zabbix Server não está em execução"
-systemctl is-active --quiet mariadb || check_error "MariaDB não está em execução"
-systemctl is-active --quiet apache2 || check_error "Apache não está em execução"
-
-update_progress 19 "Configurando regras de firewall..."
+update_progress 14 "Configurando regras de firewall..."
 if command -v ufw &> /dev/null; then
-    ufw allow in "Apache Full" >> "$LOG_FILE" 2>&1
+    ufw allow "Apache Full" >> "$LOG_FILE" 2>&1
+    ufw allow in 80/tcp >> "$LOG_FILE" 2>&1
     ufw allow 10050/tcp comment 'Zabbix Agent' >> "$LOG_FILE" 2>&1
     ufw allow 10051/tcp comment 'Zabbix Server' >> "$LOG_FILE" 2>&1
     ufw reload >> "$LOG_FILE" 2>&1
 fi
 
-update_progress 20 "Ajustando permissões e limpando arquivos temporários..."
-chown -R www-data:www-data /etc/zabbix/ /usr/share/zabbix/
-chmod -R 755 /etc/zabbix/ /usr/share/zabbix/
+update_progress 15 "Ajustando permissões finais..."
+chown -R $WEB_USER:$WEB_USER /etc/zabbix/ /usr/share/zabbix/
 rm -rf "$INSTALL_DIR"
 
-update_progress 21 "Gerando relatório final e finalizando..."
-new_line
-
+update_progress 16 "Gerando relatório final..."
 SERVER_IP=$(hostname -I | awk '{print $1}')
 [ -z "$SERVER_IP" ] && SERVER_IP="127.0.0.1"
 
-cat > /root/zabbix_info.txt << EOF
-============================================
-📊 RELATÓRIO DE INSTALAÇÃO - ZABBIX 7.0 LTS
-============================================
-✅ Status: INSTALAÇÃO BEM-SUCEDIDA
-🗓️ Data: $(date '+%d/%m/%Y %H:%M:%S')
-🐧 Sistema: Ubuntu ${UBUNTU_VERSION}
-🗄️ Banco: MariaDB ${MARIADB_VERSION}
-🐘 PHP: ${PHP_VERSION}
-🔗 ACESSO:
-URL Web: http://${SERVER_IP}/zabbix
-IP Servidor: ${SERVER_IP}
-🔐 CREDENCIAIS:
-→ Interface Web:
-Usuário: Admin
-Senha: zabbix
-Idioma Padrão: Inglês (en_US) ✅
-Idioma Disponível: Português Brasil (pt_BR) 🇧🇷
-→ Banco de Dados:
-Raiz MySQL: ${MYSQL_ROOT_PASSWORD}
-Usuário Zabbix: zabbix
-Senha Zabbix: ${ZABBIX_DB_PASSWORD}
-⚙️ ARQUIVOS DE CONFIGURAÇÃO:
-- Zabbix Server: /etc/zabbix/zabbix_server.conf
-- Idiomas: /etc/zabbix/web/zabbix.conf.php
-- PHP: /etc/php/${PHP_VERSION}/apache2/conf.d/99-zabbix.ini
-📋 LOGS:
-- Instalação: ${LOG_FILE}
-- Zabbix Server: /var/log/zabbix/zabbix_server.log
-============================================
-EOF
-
+new_line
 echo -e "${GREEN}╔════════════════════════════════════════════════════════════════╗${NC}"
-echo -e "${GREEN}║                    🎉 INSTALAÇÃO CONCLUÍDA! 🎉                   ║"
+echo -e "${GREEN}║                    🎉 INSTALAÇÃO CONCLUÍDA! 🎉                 ║"
 echo -e "${GREEN}╚════════════════════════════════════════════════════════════════╝${NC}"
 new_line
-
 echo -e "${CYAN}📌 RESUMO DAS INFORMAÇÕES:${NC}"
 echo -e "${YELLOW}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
 echo -e "${GREEN}🌐 Endereço Web: ${CYAN}http://${SERVER_IP}/zabbix${NC}"
-echo -e "${GREEN}🖥️  IP do Servidor: ${CYAN}${SERVER_IP}${NC}"
-echo -e "${GREEN}🗄️  Banco de Dados: ${CYAN}MariaDB ${MARIADB_VERSION}${NC}"
-echo -e "${GREEN}🐘 Versão PHP: ${CYAN}${PHP_VERSION}${NC}"
-echo -e "${GREEN}🌍 Idioma Padrão: ${CYAN}Inglês (en_US)${NC}"
-echo -e "${GREEN}🇧🇷 Idioma Disponível: ${CYAN}Português do Brasil${NC}"
 echo -e "${YELLOW}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
-new_line
-
 echo -e "${CYAN}🔑 ACESSO PADRÃO:${NC}"
 echo -e "${GREEN}   Usuário: ${YELLOW}Admin${NC}"
 echo -e "${GREEN}   Senha: ${YELLOW}zabbix${NC}"
-echo -e "${GREEN}   💡 Para trocar para PT-BR: clique no perfil no canto superior direito > Language > Português (Brasil)${NC}"
 new_line
 
-echo -e "${RED}⚠️  IMPORTANTE:${NC}"
-echo -e "${YELLOW}   • Senhas salvas em: /root/.zabbix_passwords${NC}"
-echo -e "${YELLOW}   • Relatório completo: /root/zabbix_info.txt${NC}"
-echo -e "${YELLOW}   • Troque a senha padrão após o primeiro login!${NC}"
-new_line
-
-read -p "$(echo -e ${CYAN}"Deseja exibir as senhas geradas agora? (s/N): "${NC})" -n 1 -r
-echo
-if [[ $REPLY =~ ^[Ss]$ ]]; then
-    cat /root/.zabbix_passwords
-    new_line
+# ==============================================
+# ABRIR NAVEGADOR AUTOMATICAMENTE
+# ==============================================
+if command -v xdg-open &> /dev/null; then
+    echo -e "${YELLOW}🌐 Abrindo o Zabbix no seu navegador padrão...${NC}"
+    # Usa o usuário original que invocou o sudo para que a janela abra na área de trabalho dele
+    if [ -n "$SUDO_USER" ]; then
+        sudo -u "$SUDO_USER" env DISPLAY="$DISPLAY" XAUTHORITY="$XAUTHORITY" xdg-open "http://localhost/zabbix" > /dev/null 2>&1 &
+    else
+        xdg-open "http://localhost/zabbix" > /dev/null 2>&1 &
+    fi
 fi
 
-echo -e "${BLUE}✨ Script finalizado com sucesso em $(date '+%H:%M:%S')! ✨${NC}"
-
+new_line
+echo -e "${BLUE}✨ Instalação finalizada com sucesso em $(date '+%H:%M:%S')! ✨${NC}"
 exit 0
