@@ -205,7 +205,6 @@ fi
 
 update_progress 4 "Adicionando repositório oficial do MariaDB..."
 if [ "$OS_FAMILY" == "debian" ]; then
-    # Injeta a base do Ubuntu (ex: noble, jammy) para que o MariaDB reconheça sistemas derivados
     MARIADB_OS_FLAG="--os-type=ubuntu --os-version=${UBUNTU_CODENAME:-noble}"
     run_with_spinner "curl -LsS https://r.mariadb.com/downloads/mariadb_repo_setup | bash -s -- --mariadb-server-version=${MARIADB_VERSION} $MARIADB_OS_FLAG" "Configurando repositório MariaDB"
 else
@@ -311,9 +310,15 @@ echo -e "${CYAN}📌 RESUMO DAS INFORMAÇÕES:${NC}"
 echo -e "${YELLOW}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
 echo -e "${GREEN}🌐 Endereço Web: ${CYAN}http://${SERVER_IP}/zabbix${NC}"
 echo -e "${YELLOW}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
-echo -e "${CYAN}🔑 ACESSO PADRÃO:${NC}"
+echo -e "${CYAN}🔑 ACESSO ZABBIX (WEB):${NC}"
 echo -e "${GREEN}   Usuário: ${YELLOW}Admin${NC}"
-echo -e "${GREEN}   Senha: ${YELLOW}zabbix${NC}"
+echo -e "${GREEN}   Senha:   ${YELLOW}zabbix${NC}"
+echo -e "${YELLOW}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+echo -e "${CYAN}🗄️  CREDENCIAIS DO BANCO DE DADOS:${NC}"
+echo -e "${GREEN}   Root MySQL: ${YELLOW}${MYSQL_ROOT_PASSWORD}${NC}"
+echo -e "${GREEN}   Usuário DB: ${YELLOW}zabbix${NC}"
+echo -e "${GREEN}   Senha DB:   ${YELLOW}${ZABBIX_DB_PASSWORD}${NC}"
+echo -e "${YELLOW}   *(Também salvo em: /root/.zabbix_passwords)*${NC}"
 new_line
 
 # ==============================================
