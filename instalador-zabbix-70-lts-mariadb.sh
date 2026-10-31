@@ -2,10 +2,6 @@
 # ==============================================================
 # Instalador Universal Zabbix (v3.4)
 # Versões: 7.0 LTS | 7.4 Estável | 8.0
-# Suporte: Ubuntu, Debian, Zorin, Mint, Pop!_OS, elementary,
-#          Kali, Deepin, RHEL, Rocky, AlmaLinux, Fedora,
-#          openSUSE, SLES
-# Autor: Baseado no conceito original de Afonso Henrique
 # ==============================================================
 set -euo pipefail
 
