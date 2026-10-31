@@ -1,7 +1,9 @@
 #!/usr/bin/env bash
 # ==============================================================
-# Script: Instalador Universal Zabbix (v3.0)
+# Script: Instalador Universal Zabbix (v3.1)
 # Versões: 7.0 LTS | 7.4 Estável | 8.0 Pré-release (Estudo)
+# Suporte: Ubuntu, Debian, Zorin, Mint, Pop!_OS, RHEL, Rocky,
+#          AlmaLinux, Fedora, openSUSE, SLES
 # Autor: Baseado no conceito original de Afonso Henrique
 # ==============================================================
 set -euo pipefail
@@ -34,22 +36,91 @@ command -v systemctl >/dev/null || erro "Systemd não encontrado."
 . /etc/os-release
 DISTRO_ID=${ID,,}
 DISTRO_VER=${VERSION_ID:-0}
+DISTRO_LIKE=${ID_LIKE:-}
 
+# Função para mapear a versão da distro para a versão equivalente do Ubuntu
+mapear_para_ubuntu() {
+    local id=$1 ver=$2
+    case "$id" in
+        zorin)
+            case "$ver" in
+                16) echo "20.04" ;;
+                17) echo "22.04" ;;
+                18) echo "24.04" ;;
+                *)  erro "Versão do Zorin OS ($ver) não mapeada. Adicione manualmente no script." ;;
+            esac
+            ;;
+        linuxmint)
+            # Mint 21.x -> Ubuntu 22.04; Mint 22.x -> Ubuntu 24.04
+            case "$ver" in
+                22*) echo "24.04" ;;
+                21*) echo "22.04" ;;
+                20*) echo "20.04" ;;
+                *)   echo "24.04" ;;
+            esac
+            ;;
+        pop)
+            case "$ver" in
+                24*) echo "24.04" ;;
+                22*) echo "22.04" ;;
+                20*) echo "20.04" ;;
+                *)   echo "24.04" ;;
+            esac
+            ;;
+        elementary|kali|deepin)
+            echo "24.04"
+            ;;
+        ubuntu)
+            echo "$ver"
+            ;;
+        *)
+            echo "$ver"
+            ;;
+    esac
+}
+
+# Detecção de gerenciador de pacotes e normalização da distro
 case "$DISTRO_ID" in
-    ubuntu|debian|raspbian) PKG_MGR="apt" ;;
-    rhel|centos|rocky|almalinux|ol|fedora) PKG_MGR="dnf" ;;
-    opensuse*|sles) PKG_MGR="zypper" ;;
-    *) erro "Distribuição '${DISTRO_ID}' não suportada oficialmente." ;;
+    ubuntu|debian|raspbian)
+        PKG_MGR="apt"
+        ;;
+    zorin|linuxmint|pop|elementary|kali|deepin)
+        PKG_MGR="apt"
+        DISTRO_VER=$(mapear_para_ubuntu "$DISTRO_ID" "$DISTRO_VER")
+        log "Distribuição derivada do Ubuntu detectada (${DISTRO_ID}). Mapeando para Ubuntu ${DISTRO_VER}."
+        DISTRO_ID="ubuntu"
+        ;;
+    rhel|centos|rocky|almalinux|ol|fedora)
+        PKG_MGR="dnf"
+        ;;
+    opensuse*|sles)
+        PKG_MGR="zypper"
+        ;;
+    *)
+        # Fallback: usa ID_LIKE
+        if [[ "${DISTRO_LIKE,,}" == *ubuntu* || "${DISTRO_LIKE,,}" == *debian* ]]; then
+            PKG_MGR="apt"
+            DISTRO_VER=$(mapear_para_ubuntu "$DISTRO_ID" "$DISTRO_VER")
+            log "Distribuição '${DISTRO_ID}' com ID_LIKE='${DISTRO_LIKE}'. Tratando como Ubuntu ${DISTRO_VER}."
+            DISTRO_ID="ubuntu"
+        elif [[ "${DISTRO_LIKE,,}" == *rhel* || "${DISTRO_LIKE,,}" == *fedora* ]]; then
+            PKG_MGR="dnf"
+        elif [[ "${DISTRO_LIKE,,}" == *suse* ]]; then
+            PKG_MGR="zypper"
+        else
+            erro "Distribuição '${DISTRO_ID}' (ID_LIKE='${DISTRO_LIKE}') não suportada."
+        fi
+        ;;
 esac
 
-log "Distribuição: ${PRETTY_NAME} (gerenciador: ${PKG_MGR})"
+log "Distribuição efetiva: ${PRETTY_NAME:-$DISTRO_ID $DISTRO_VER} (gerenciador: ${PKG_MGR})"
 
 # --------------------------------------------------------------
 # 1. Menu interativo
 # --------------------------------------------------------------
 clear
 echo -e "${CYAN}============================================================${NC}"
-echo -e "${CYAN}        🤖 INSTALADOR UNIVERSAL ZABBIX (v3.0)               ${NC}"
+echo -e "${CYAN}        🤖 INSTALADOR UNIVERSAL ZABBIX (v3.1)               ${NC}"
 echo -e "${CYAN}============================================================${NC}"
 
 echo -e "\n${YELLOW}O que deseja instalar?${NC}"
@@ -107,7 +178,6 @@ if [[ "$TOTAL_RAM" -lt 1800 && "$TIPO_INSTALACAO" == "1" ]]; then
     read -rp "Continuar mesmo assim? (s/N): " CONT
     [[ "${CONT,,}" != "s" ]] && exit 1
 fi
-# Aviso específico para 8.0 (recomendado 4GB+)
 if [[ "$ZBX_VER" == "8.0" && "$TOTAL_RAM" -lt 3800 ]]; then
     warn "Para o Zabbix 8.0, a recomendação é de pelo menos 4 GB de RAM (6 GB para produção)."
     warn "Seu sistema tem ${TOTAL_RAM} MB. A instalação prosseguirá, mas o desempenho pode ser limitado."
@@ -121,7 +191,6 @@ progress_bar 1 5 "Configurando repositório Zabbix ${ZBX_VER}"
 case "$PKG_MGR" in
     apt)
         if [[ "$DISTRO_ID" == "ubuntu" ]]; then
-            # Mapear versão do Ubuntu (ex.: 24.04, 26.04)
             REL_PKG="zabbix-release_latest_${ZBX_VER}+ubuntu${DISTRO_VER}_all.deb"
             REL_URL="https://repo.zabbix.com/zabbix/${ZBX_VER}/ubuntu/pool/main/z/zabbix-release/${REL_PKG}"
         else
@@ -149,7 +218,6 @@ esac
 progress_bar 2 5 "Instalando pacotes do Zabbix ${ZBX_VER}"
 
 if [[ "$TIPO_INSTALACAO" == "1" ]]; then
-    # SERVER
     if [[ "$DB_TYPE" == "mysql" ]]; then
         case "$PKG_MGR" in
             apt) apt install -y zabbix-server-mysql zabbix-frontend-php zabbix-nginx-conf zabbix-sql-scripts zabbix-agent2 mariadb-server ;;
@@ -164,7 +232,6 @@ if [[ "$TIPO_INSTALACAO" == "1" ]]; then
         esac
     fi
 else
-    # PROXY
     case "$PKG_MGR" in
         apt) apt install -y zabbix-proxy-${DB_TYPE} zabbix-sql-scripts zabbix-agent2 ;;
         dnf) dnf install -y zabbix-proxy-${DB_TYPE} zabbix-sql-scripts zabbix-agent2 ;;
@@ -189,14 +256,11 @@ GRANT ALL PRIVILEGES ON zabbix.* TO 'zabbix'@'localhost';
 SET GLOBAL log_bin_trust_function_creators = 1;
 FLUSH PRIVILEGES;
 SQL
-        # Importar esquema (caminho pode variar ligeiramente na 8.0)
         ZCAT_PATH="/usr/share/zabbix-sql-scripts/mysql/server.sql.gz"
         [[ -f "$ZCAT_PATH" ]] || ZCAT_PATH="/usr/share/zabbix/sql-scripts/mysql/server.sql.gz"
         zcat "$ZCAT_PATH" | mysql --default-character-set=utf8mb4 -uzabbix -p"${DB_PASS}" zabbix
-
         sed -i "s/^# DBPassword=.*/DBPassword=${DB_PASS}/" /etc/zabbix/zabbix_server.conf
     else
-        # PostgreSQL
         systemctl enable --now postgresql
         sudo -u postgres psql <<SQL
 CREATE USER zabbix WITH PASSWORD '${DB_PASS}';
@@ -221,7 +285,6 @@ if [[ "$TIPO_INSTALACAO" == "1" ]]; then
         sed -i 's/# server_name example.com;/server_name _;/' "$NGINX_CONF"
     fi
 
-    # Ajuste de timezone no PHP (tenta localizar o ini carregado)
     PHP_INI=$(php -i 2>/dev/null | grep -oP 'Loaded Configuration File => \K.*' || true)
     if [[ -n "$PHP_INI" && -f "$PHP_INI" ]]; then
         sed -i 's/;date.timezone =/date.timezone = America\/Sao_Paulo/' "$PHP_INI"
@@ -230,9 +293,7 @@ if [[ "$TIPO_INSTALACAO" == "1" ]]; then
     fi
 fi
 
-# Iniciar serviços
 progress_bar 5 5 "Iniciando serviços"
-# Tenta iniciar php-fpm com o nome de serviço disponível
 for svc in php8.5-fpm php8.4-fpm php8.3-fpm php8.2-fpm php8.1-fpm; do
     if systemctl list-unit-files | grep -q "^${svc}.service"; then
         systemctl restart "$svc" 2>/dev/null || true
