@@ -1,14 +1,14 @@
 #!/usr/bin/env bash
 # ==============================================================
-# Script: Instalador Universal Zabbix (v3.1)
-# Versões: 7.0 LTS | 7.4 Estável | 8.0 Pré-release (Estudo)
-# Suporte: Ubuntu, Debian, Zorin, Mint, Pop!_OS, RHEL, Rocky,
-#          AlmaLinux, Fedora, openSUSE, SLES
+# Instalador Universal Zabbix (v3.3)
+# Versões: 7.0 LTS | 7.4 Estável | 8.0 (LTS/Pré-release)
+# Suporte: Ubuntu, Debian, Zorin, Mint, Pop!_OS, elementary,
+#          Kali, Deepin, RHEL, Rocky, AlmaLinux, Fedora,
+#          openSUSE, SLES
 # Autor: Baseado no conceito original de Afonso Henrique
 # ==============================================================
 set -euo pipefail
 
-# Cores
 RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[0;33m'; CYAN='\033[0;36m'; NC='\033[0m'
 
 log()  { echo -e "${CYAN}[INFO]${NC} $*"; }
@@ -38,7 +38,6 @@ DISTRO_ID=${ID,,}
 DISTRO_VER=${VERSION_ID:-0}
 DISTRO_LIKE=${ID_LIKE:-}
 
-# Função para mapear a versão da distro para a versão equivalente do Ubuntu
 mapear_para_ubuntu() {
     local id=$1 ver=$2
     case "$id" in
@@ -47,61 +46,42 @@ mapear_para_ubuntu() {
                 16) echo "20.04" ;;
                 17) echo "22.04" ;;
                 18) echo "24.04" ;;
-                *)  erro "Versão do Zorin OS ($ver) não mapeada. Adicione manualmente no script." ;;
-            esac
-            ;;
+                *)  erro "Versão do Zorin OS ($ver) não mapeada." ;;
+            esac ;;
         linuxmint)
-            # Mint 21.x -> Ubuntu 22.04; Mint 22.x -> Ubuntu 24.04
             case "$ver" in
                 22*) echo "24.04" ;;
                 21*) echo "22.04" ;;
                 20*) echo "20.04" ;;
                 *)   echo "24.04" ;;
-            esac
-            ;;
+            esac ;;
         pop)
             case "$ver" in
                 24*) echo "24.04" ;;
                 22*) echo "22.04" ;;
                 20*) echo "20.04" ;;
                 *)   echo "24.04" ;;
-            esac
-            ;;
-        elementary|kali|deepin)
-            echo "24.04"
-            ;;
-        ubuntu)
-            echo "$ver"
-            ;;
-        *)
-            echo "$ver"
-            ;;
+            esac ;;
+        elementary|kali|deepin) echo "24.04" ;;
+        ubuntu) echo "$ver" ;;
+        *) echo "$ver" ;;
     esac
 }
 
-# Detecção de gerenciador de pacotes e normalização da distro
 case "$DISTRO_ID" in
-    ubuntu|debian|raspbian)
-        PKG_MGR="apt"
-        ;;
+    ubuntu|debian|raspbian) PKG_MGR="apt" ;;
     zorin|linuxmint|pop|elementary|kali|deepin)
         PKG_MGR="apt"
         DISTRO_VER=$(mapear_para_ubuntu "$DISTRO_ID" "$DISTRO_VER")
         log "Distribuição derivada do Ubuntu detectada (${DISTRO_ID}). Mapeando para Ubuntu ${DISTRO_VER}."
-        DISTRO_ID="ubuntu"
-        ;;
-    rhel|centos|rocky|almalinux|ol|fedora)
-        PKG_MGR="dnf"
-        ;;
-    opensuse*|sles)
-        PKG_MGR="zypper"
-        ;;
+        DISTRO_ID="ubuntu" ;;
+    rhel|centos|rocky|almalinux|ol|fedora) PKG_MGR="dnf" ;;
+    opensuse*|sles) PKG_MGR="zypper" ;;
     *)
-        # Fallback: usa ID_LIKE
         if [[ "${DISTRO_LIKE,,}" == *ubuntu* || "${DISTRO_LIKE,,}" == *debian* ]]; then
             PKG_MGR="apt"
             DISTRO_VER=$(mapear_para_ubuntu "$DISTRO_ID" "$DISTRO_VER")
-            log "Distribuição '${DISTRO_ID}' com ID_LIKE='${DISTRO_LIKE}'. Tratando como Ubuntu ${DISTRO_VER}."
+            log "ID_LIKE='${DISTRO_LIKE}'. Tratando como Ubuntu ${DISTRO_VER}."
             DISTRO_ID="ubuntu"
         elif [[ "${DISTRO_LIKE,,}" == *rhel* || "${DISTRO_LIKE,,}" == *fedora* ]]; then
             PKG_MGR="dnf"
@@ -109,8 +89,7 @@ case "$DISTRO_ID" in
             PKG_MGR="zypper"
         else
             erro "Distribuição '${DISTRO_ID}' (ID_LIKE='${DISTRO_LIKE}') não suportada."
-        fi
-        ;;
+        fi ;;
 esac
 
 log "Distribuição efetiva: ${PRETTY_NAME:-$DISTRO_ID $DISTRO_VER} (gerenciador: ${PKG_MGR})"
@@ -120,7 +99,7 @@ log "Distribuição efetiva: ${PRETTY_NAME:-$DISTRO_ID $DISTRO_VER} (gerenciador
 # --------------------------------------------------------------
 clear
 echo -e "${CYAN}============================================================${NC}"
-echo -e "${CYAN}        🤖 INSTALADOR UNIVERSAL ZABBIX (v3.1)               ${NC}"
+echo -e "${CYAN}        🤖 INSTALADOR UNIVERSAL ZABBIX (v3.3)               ${NC}"
 echo -e "${CYAN}============================================================${NC}"
 
 echo -e "\n${YELLOW}O que deseja instalar?${NC}"
@@ -131,22 +110,19 @@ read -rp "Opção [1-2]: " TIPO_INSTALACAO
 echo -e "\n${YELLOW}Versão do Zabbix:${NC}"
 echo "  1) Zabbix 7.0 LTS (Recomendado para produção)"
 echo "  2) Zabbix 7.4     (Última release estável)"
-echo "  3) Zabbix 8.0     (Pré-release para estudo e novidades)"
+echo "  3) Zabbix 8.0     (LTS mais recente / Estudo)"
 read -rp "Opção [1-3]: " VERSAO_OPC
 case $VERSAO_OPC in
     1) ZBX_VER="7.0" ;;
     2) ZBX_VER="7.4" ;;
     3) ZBX_VER="8.0"
-       warn "Você selecionou o Zabbix 8.0, que está em fase de PRÉ-RELEASE (Release Candidate)."
-       warn "Ideal para estudar novidades como ClickHouse, JSON nativo, Scatter Plot e CEP."
-       warn "NÃO recomendado para ambientes de produção."
-       read -rp "Deseja continuar com a instalação de estudo? (s/N): " CONT_80
-       [[ "${CONT_80,,}" != "s" ]] && exit 1
-       ;;
+       warn "Você selecionou o Zabbix 8.0, que é a versão LTS mais recente."
+       warn "Ideal para estudar novidades: ClickHouse, JSON nativo, Scatter Plot e CEP."
+       read -rp "Deseja continuar com a instalação? (s/N): " CONT_80
+       [[ "${CONT_80,,}" != "s" ]] && exit 1 ;;
     *) ZBX_VER="7.0" ;;
 esac
 
-# Banco de dados
 if [[ "$TIPO_INSTALACAO" == "1" ]]; then
     echo -e "\n${YELLOW}Banco de dados para o Server:${NC}"
     echo "  1) MySQL / MariaDB"
@@ -171,7 +147,6 @@ else
     esac
 fi
 
-# Verificação de RAM
 TOTAL_RAM=$(free -m | awk '/Mem:/ {print $2}')
 if [[ "$TOTAL_RAM" -lt 1800 && "$TIPO_INSTALACAO" == "1" ]]; then
     warn "RAM insuficiente (${TOTAL_RAM} MB). O Server pode ficar lento."
@@ -179,37 +154,47 @@ if [[ "$TOTAL_RAM" -lt 1800 && "$TIPO_INSTALACAO" == "1" ]]; then
     [[ "${CONT,,}" != "s" ]] && exit 1
 fi
 if [[ "$ZBX_VER" == "8.0" && "$TOTAL_RAM" -lt 3800 ]]; then
-    warn "Para o Zabbix 8.0, a recomendação é de pelo menos 4 GB de RAM (6 GB para produção)."
-    warn "Seu sistema tem ${TOTAL_RAM} MB. A instalação prosseguirá, mas o desempenho pode ser limitado."
+    warn "Para Zabbix 8.0 recomenda-se ≥4 GB de RAM (6 GB em produção)."
+    warn "Seu sistema tem ${TOTAL_RAM} MB. Prosseguindo."
 fi
 
 # --------------------------------------------------------------
-# 2. Adicionar repositório oficial
+# 2. Adicionar repositório oficial (URL corrigida)
 # --------------------------------------------------------------
 progress_bar 1 5 "Configurando repositório Zabbix ${ZBX_VER}"
+
+# A versão 8.0 introduziu o subdiretório /release/ na estrutura do repositório.
+if [[ "$ZBX_VER" == "8.0" ]]; then
+    REL_BASE="https://repo.zabbix.com/zabbix/${ZBX_VER}/release"
+else
+    REL_BASE="https://repo.zabbix.com/zabbix/${ZBX_VER}"
+fi
 
 case "$PKG_MGR" in
     apt)
         if [[ "$DISTRO_ID" == "ubuntu" ]]; then
             REL_PKG="zabbix-release_latest_${ZBX_VER}+ubuntu${DISTRO_VER}_all.deb"
-            REL_URL="https://repo.zabbix.com/zabbix/${ZBX_VER}/ubuntu/pool/main/z/zabbix-release/${REL_PKG}"
+            REL_URL="${REL_BASE}/ubuntu/pool/main/z/zabbix-release/${REL_PKG}"
         else
             REL_PKG="zabbix-release_latest_${ZBX_VER}+debian${DISTRO_VER}_all.deb"
-            REL_URL="https://repo.zabbix.com/zabbix/${ZBX_VER}/debian/pool/main/z/zabbix-release/${REL_PKG}"
+            REL_URL="${REL_BASE}/debian/pool/main/z/zabbix-release/${REL_PKG}"
         fi
         wget -qO "/tmp/${REL_PKG}" "$REL_URL" || erro "Falha ao baixar pacote de repositório."
         dpkg -i "/tmp/${REL_PKG}"
-        apt update -qq
-        ;;
+        apt update -qq ;;
     dnf)
-        REL_PKG="zabbix-release-latest-${ZBX_VER}.el${DISTRO_VER}.noarch.rpm"
-        REL_URL="https://repo.zabbix.com/zabbix/${ZBX_VER}/rhel/${DISTRO_VER}/x86_64/${REL_PKG}"
-        dnf install -y "$REL_URL" || erro "Falha ao instalar repositório RPM."
-        ;;
+        # Para RHEL/Alma/Rocky a estrutura também mudou na 8.0
+        if [[ "$ZBX_VER" == "8.0" ]]; then
+            REL_PKG="zabbix-release-latest-${ZBX_VER}.el${DISTRO_VER}.noarch.rpm"
+            REL_URL="https://repo.zabbix.com/zabbix/${ZBX_VER}/release/rhel/${DISTRO_VER}/x86_64/${REL_PKG}"
+        else
+            REL_PKG="zabbix-release-latest-${ZBX_VER}.el${DISTRO_VER}.noarch.rpm"
+            REL_URL="https://repo.zabbix.com/zabbix/${ZBX_VER}/rhel/${DISTRO_VER}/x86_64/${REL_PKG}"
+        fi
+        dnf install -y "$REL_URL" || erro "Falha ao instalar repositório RPM." ;;
     zypper)
         zypper --non-interactive addrepo -f "https://repo.zabbix.com/zabbix/${ZBX_VER}/sles/15/x86_64/" zabbix || erro "Falha ao adicionar repositório SUSE."
-        zypper --non-interactive --gpg-auto-import-keys refresh
-        ;;
+        zypper --non-interactive --gpg-auto-import-keys refresh ;;
 esac
 
 # --------------------------------------------------------------
@@ -226,9 +211,9 @@ if [[ "$TIPO_INSTALACAO" == "1" ]]; then
         esac
     else
         case "$PKG_MGR" in
-            apt) apt install -y zabbix-server-pgsql zabbix-frontend-php zabbix-nginx-conf zabbix-sql-scripts zabbix-agent2 postgresql ;;
-            dnf) dnf install -y zabbix-server-pgsql zabbix-web-pgsql zabbix-nginx-conf zabbix-sql-scripts zabbix-agent2 postgresql-server ;;
-            zypper) zypper install -y zabbix-server-pgsql zabbix-web-pgsql zabbix-nginx-conf zabbix-sql-scripts zabbix-agent2 postgresql-server ;;
+            apt) apt install -y zabbix-server-pgsql zabbix-frontend-php zabbix-nginx-conf zabbix-sql-scripts zabbix-agent2 postgresql php-pgsql ;;
+            dnf) dnf install -y zabbix-server-pgsql zabbix-web-pgsql zabbix-nginx-conf zabbix-sql-scripts zabbix-agent2 postgresql-server php-pgsql ;;
+            zypper) zypper install -y zabbix-server-pgsql zabbix-web-pgsql zabbix-nginx-conf zabbix-sql-scripts zabbix-agent2 postgresql-server php-pgsql ;;
         esac
     fi
 else
@@ -242,34 +227,75 @@ fi
 # --------------------------------------------------------------
 # 4. Configurar banco de dados (Server)
 # --------------------------------------------------------------
+DB_PASS=""
+ADMIN_PASS=""
+ADMIN_SET=0
+
 if [[ "$TIPO_INSTALACAO" == "1" ]]; then
     progress_bar 3 5 "Configurando banco de dados (${DB_TYPE})"
 
-    DB_PASS=$(openssl rand -base64 16)
+    DB_PASS=$(openssl rand -base64 20 | tr -dc 'A-Za-z0-9' | head -c 20)
+    ADMIN_PASS=$(openssl rand -base64 20 | tr -dc 'A-Za-z0-9' | head -c 16)
+
+    ADMIN_HASH=$(php -r "echo password_hash('${ADMIN_PASS}', PASSWORD_BCRYPT, ['cost' => 10]);")
 
     if [[ "$DB_TYPE" == "mysql" ]]; then
         systemctl enable --now mariadb
+
         mysql -uroot <<SQL
-CREATE DATABASE zabbix CHARACTER SET utf8mb4 COLLATE utf8mb4_bin;
-CREATE USER 'zabbix'@'localhost' IDENTIFIED BY '${DB_PASS}';
+CREATE DATABASE IF NOT EXISTS zabbix CHARACTER SET utf8mb4 COLLATE utf8mb4_bin;
+CREATE USER IF NOT EXISTS 'zabbix'@'localhost' IDENTIFIED BY '${DB_PASS}';
+ALTER USER 'zabbix'@'localhost' IDENTIFIED BY '${DB_PASS}';
 GRANT ALL PRIVILEGES ON zabbix.* TO 'zabbix'@'localhost';
 SET GLOBAL log_bin_trust_function_creators = 1;
 FLUSH PRIVILEGES;
 SQL
+
         ZCAT_PATH="/usr/share/zabbix-sql-scripts/mysql/server.sql.gz"
         [[ -f "$ZCAT_PATH" ]] || ZCAT_PATH="/usr/share/zabbix/sql-scripts/mysql/server.sql.gz"
+        [[ -f "$ZCAT_PATH" ]] || erro "Esquema SQL do Zabbix não encontrado."
         zcat "$ZCAT_PATH" | mysql --default-character-set=utf8mb4 -uzabbix -p"${DB_PASS}" zabbix
+
+        if mysql -uzabbix -p"${DB_PASS}" zabbix -e \
+            "UPDATE users SET passwd='${ADMIN_HASH}', attempt_failed=0, attempt_ip='', attempt_clock=0 WHERE username='Admin';" 2>/dev/null; then
+            ADMIN_SET=1
+        else
+            warn "Não foi possível alterar a senha do Admin. Mantendo padrão Admin/zabbix."
+        fi
+
         sed -i "s/^# DBPassword=.*/DBPassword=${DB_PASS}/" /etc/zabbix/zabbix_server.conf
+        grep -q '^DBPassword=' /etc/zabbix/zabbix_server.conf || echo "DBPassword=${DB_PASS}" >> /etc/zabbix/zabbix_server.conf
     else
         systemctl enable --now postgresql
+
         sudo -u postgres psql <<SQL
-CREATE USER zabbix WITH PASSWORD '${DB_PASS}';
-CREATE DATABASE zabbix OWNER zabbix;
+DO \$\$
+BEGIN
+   IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'zabbix') THEN
+      CREATE ROLE zabbix LOGIN PASSWORD '${DB_PASS}';
+   ELSE
+      ALTER ROLE zabbix WITH LOGIN PASSWORD '${DB_PASS}';
+   END IF;
+END
+\$\$;
 SQL
+        sudo -u postgres psql -tc "SELECT 1 FROM pg_database WHERE datname = 'zabbix'" | grep -q 1 || \
+            sudo -u postgres createdb -O zabbix zabbix
+
         ZCAT_PATH="/usr/share/zabbix-sql-scripts/postgresql/server.sql.gz"
         [[ -f "$ZCAT_PATH" ]] || ZCAT_PATH="/usr/share/zabbix/sql-scripts/postgresql/server.sql.gz"
+        [[ -f "$ZCAT_PATH" ]] || erro "Esquema SQL do Zabbix não encontrado."
         zcat "$ZCAT_PATH" | sudo -u zabbix psql zabbix
+
+        if sudo -u zabbix psql zabbix -c \
+            "UPDATE users SET passwd='${ADMIN_HASH}', attempt_failed=0, attempt_ip='', attempt_clock=0 WHERE username='Admin';" >/dev/null 2>&1; then
+            ADMIN_SET=1
+        else
+            warn "Não foi possível alterar a senha do Admin. Mantendo Admin/zabbix."
+        fi
+
         sed -i "s/^# DBPassword=.*/DBPassword=${DB_PASS}/" /etc/zabbix/zabbix_server.conf
+        grep -q '^DBPassword=' /etc/zabbix/zabbix_server.conf || echo "DBPassword=${DB_PASS}" >> /etc/zabbix/zabbix_server.conf
     fi
 fi
 
@@ -289,7 +315,7 @@ if [[ "$TIPO_INSTALACAO" == "1" ]]; then
     if [[ -n "$PHP_INI" && -f "$PHP_INI" ]]; then
         sed -i 's/;date.timezone =/date.timezone = America\/Sao_Paulo/' "$PHP_INI"
     else
-        warn "Arquivo php.ini não localizado automaticamente. Ajuste o timezone manualmente, se necessário."
+        warn "php.ini não localizado. Ajuste o timezone manualmente se necessário."
     fi
 fi
 
@@ -302,25 +328,54 @@ for svc in php8.5-fpm php8.4-fpm php8.3-fpm php8.2-fpm php8.1-fpm; do
     fi
 done
 systemctl restart zabbix-server zabbix-agent2 nginx 2>/dev/null || true
-systemctl enable zabbix-server zabbix-agent2 nginx 2>/dev/null || true
+systemctl enable  zabbix-server zabbix-agent2 nginx 2>/dev/null || true
 
 # --------------------------------------------------------------
-# 6. Finalização
+# 6. Finalização + credenciais
 # --------------------------------------------------------------
+CRED_FILE="/root/zabbix-credentials-$(date +%Y%m%d-%H%M%S).txt"
+
+{
+echo "=============================================================="
+echo " Zabbix ${ZBX_VER} - Credenciais geradas automaticamente"
+echo " Data: $(date '+%Y-%m-%d %H:%M:%S')"
+echo " Host: $(hostname) ($(hostname -I | awk '{print $1}'))"
+echo "=============================================================="
+echo ""
+echo " FRONTEND WEB"
+echo "   URL......: http://<IP_DO_SERVIDOR>:8080"
+if [[ "$ADMIN_SET" -eq 1 ]]; then
+    echo "   Usuario..: Admin"
+    echo "   Senha....: ${ADMIN_PASS}"
+else
+    echo "   Usuario..: Admin"
+    echo "   Senha....: zabbix  (senha padrão não pôde ser alterada)"
+fi
+echo ""
+if [[ -n "$DB_PASS" ]]; then
+echo " BANCO DE DADOS (${DB_TYPE})"
+echo "   Host.....: localhost"
+echo "   Database.: zabbix"
+echo "   Usuario..: zabbix"
+echo "   Senha....: ${DB_PASS}"
+echo ""
+fi
+echo " Guarde este arquivo em local seguro. Remova-o após anotar."
+echo "=============================================================="
+} | tee "$CRED_FILE"
+chmod 600 "$CRED_FILE"
+
 echo -e "\n${GREEN}============================================================${NC}"
-echo -e "${GREEN}          🎉 INSTALAÇÃO CONCLUÍDA! 🎉                      ${NC}"
+echo -e "${GREEN}          🎉 INSTALAÇÃO CONCLUÍDA COM SUCESSO! 🎉          ${NC}"
 echo -e "${GREEN}============================================================${NC}"
 echo -e "Versão instalada: ${CYAN}Zabbix ${ZBX_VER}${NC}"
-echo -e "Acesse o frontend em: ${CYAN}http://<IP_DO_SERVIDOR>:8080${NC}"
-echo -e "Usuário padrão: ${YELLOW}Admin${NC} | Senha: ${YELLOW}zabbix${NC}"
-echo -e "Altere a senha imediatamente após o primeiro login."
-if [[ -n "${DB_PASS:-}" ]]; then
-    echo -e "\n${YELLOW}Senha do banco de dados (guarde-a):${NC} ${DB_PASS}"
+echo -e "Frontend......: ${CYAN}http://<IP_DO_SERVIDOR>:8080${NC}"
+if [[ "$ADMIN_SET" -eq 1 ]]; then
+    echo -e "Usuário Admin.: ${YELLOW}Admin${NC}"
+    echo -e "Senha Admin...: ${YELLOW}${ADMIN_PASS}${NC}"
+else
+    echo -e "Usuário Admin.: ${YELLOW}Admin${NC}  |  Senha: ${YELLOW}zabbix${NC}  (altere no 1º login!)"
 fi
-
-if [[ "$ZBX_VER" == "8.0" ]]; then
-    echo -e "\n${YELLOW}🔬 Nota de estudo (Zabbix 8.0):${NC}"
-    echo "- Versão pré-release: ideal para laboratório, não para produção."
-    echo "- Explore: suporte a ClickHouse, tipo JSON, widget Scatter plot e CEP."
-    echo "- Consulte as notas de upgrade oficiais antes de migrar dados reais."
-fi
+[[ -n "$DB_PASS" ]] && echo -e "Senha do BD...: ${YELLOW}${DB_PASS}${NC}"
+echo -e "\nCredenciais salvas em: ${CYAN}${CRED_FILE}${NC} (permissão 600)"
+echo -e "${YELLOW}Anote e depois apague o arquivo:${NC} rm -f ${CRED_FILE}"
