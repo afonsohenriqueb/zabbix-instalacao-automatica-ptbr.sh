@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # ==============================================================
-# Instalador Universal Zabbix (v3.3)
-# Versões: 7.0 LTS | 7.4 Estável | 8.0 (LTS/Pré-release)
+# Instalador Universal Zabbix (v3.4)
+# Versões: 7.0 LTS | 7.4 Estável | 8.0
 # Suporte: Ubuntu, Debian, Zorin, Mint, Pop!_OS, elementary,
 #          Kali, Deepin, RHEL, Rocky, AlmaLinux, Fedora,
 #          openSUSE, SLES
@@ -99,7 +99,7 @@ log "Distribuição efetiva: ${PRETTY_NAME:-$DISTRO_ID $DISTRO_VER} (gerenciador
 # --------------------------------------------------------------
 clear
 echo -e "${CYAN}============================================================${NC}"
-echo -e "${CYAN}        🤖 INSTALADOR UNIVERSAL ZABBIX (v3.3)               ${NC}"
+echo -e "${CYAN}        🤖 INSTALADOR UNIVERSAL ZABBIX (v3.4)               ${NC}"
 echo -e "${CYAN}============================================================${NC}"
 
 echo -e "\n${YELLOW}O que deseja instalar?${NC}"
@@ -115,8 +115,8 @@ read -rp "Opção [1-3]: " VERSAO_OPC
 case $VERSAO_OPC in
     1) ZBX_VER="7.0" ;;
     2) ZBX_VER="7.4" ;;
-    3) ZBX_VER="8.0"
-       warn "Você selecionou o Zabbix 8.0, que é a versão LTS mais recente."
+    3|8) ZBX_VER="8.0"
+       warn "Você selecionou o Zabbix 8.0."
        warn "Ideal para estudar novidades: ClickHouse, JSON nativo, Scatter Plot e CEP."
        read -rp "Deseja continuar com a instalação? (s/N): " CONT_80
        [[ "${CONT_80,,}" != "s" ]] && exit 1 ;;
@@ -147,7 +147,8 @@ else
     esac
 fi
 
-TOTAL_RAM=$(free -m | awk '/Mem:/ {print $2}')
+# Verificação de RAM robusta (independente do idioma do sistema)
+TOTAL_RAM=$(awk '/MemTotal/ {print int($2/1024)}' /proc/meminfo)
 if [[ "$TOTAL_RAM" -lt 1800 && "$TIPO_INSTALACAO" == "1" ]]; then
     warn "RAM insuficiente (${TOTAL_RAM} MB). O Server pode ficar lento."
     read -rp "Continuar mesmo assim? (s/N): " CONT
@@ -159,11 +160,10 @@ if [[ "$ZBX_VER" == "8.0" && "$TOTAL_RAM" -lt 3800 ]]; then
 fi
 
 # --------------------------------------------------------------
-# 2. Adicionar repositório oficial (URL corrigida)
+# 2. Adicionar repositório oficial
 # --------------------------------------------------------------
 progress_bar 1 5 "Configurando repositório Zabbix ${ZBX_VER}"
 
-# A versão 8.0 introduziu o subdiretório /release/ na estrutura do repositório.
 if [[ "$ZBX_VER" == "8.0" ]]; then
     REL_BASE="https://repo.zabbix.com/zabbix/${ZBX_VER}/release"
 else
@@ -183,7 +183,6 @@ case "$PKG_MGR" in
         dpkg -i "/tmp/${REL_PKG}"
         apt update -qq ;;
     dnf)
-        # Para RHEL/Alma/Rocky a estrutura também mudou na 8.0
         if [[ "$ZBX_VER" == "8.0" ]]; then
             REL_PKG="zabbix-release-latest-${ZBX_VER}.el${DISTRO_VER}.noarch.rpm"
             REL_URL="https://repo.zabbix.com/zabbix/${ZBX_VER}/release/rhel/${DISTRO_VER}/x86_64/${REL_PKG}"
@@ -225,7 +224,7 @@ else
 fi
 
 # --------------------------------------------------------------
-# 4. Configurar banco de dados (Server)
+# 4. Configurar banco de dados (Server) - COM DROP DATABASE
 # --------------------------------------------------------------
 DB_PASS=""
 ADMIN_PASS=""
@@ -242,8 +241,10 @@ if [[ "$TIPO_INSTALACAO" == "1" ]]; then
     if [[ "$DB_TYPE" == "mysql" ]]; then
         systemctl enable --now mariadb
 
+        # O DROP DATABASE previne o erro "Table already exists"
         mysql -uroot <<SQL
-CREATE DATABASE IF NOT EXISTS zabbix CHARACTER SET utf8mb4 COLLATE utf8mb4_bin;
+DROP DATABASE IF EXISTS zabbix;
+CREATE DATABASE zabbix CHARACTER SET utf8mb4 COLLATE utf8mb4_bin;
 CREATE USER IF NOT EXISTS 'zabbix'@'localhost' IDENTIFIED BY '${DB_PASS}';
 ALTER USER 'zabbix'@'localhost' IDENTIFIED BY '${DB_PASS}';
 GRANT ALL PRIVILEGES ON zabbix.* TO 'zabbix'@'localhost';
@@ -279,8 +280,9 @@ BEGIN
 END
 \$\$;
 SQL
-        sudo -u postgres psql -tc "SELECT 1 FROM pg_database WHERE datname = 'zabbix'" | grep -q 1 || \
-            sudo -u postgres createdb -O zabbix zabbix
+        # DROP DATABASE previne o erro de tabela duplicada
+        sudo -u postgres psql -c "DROP DATABASE IF EXISTS zabbix;"
+        sudo -u postgres createdb -O zabbix zabbix
 
         ZCAT_PATH="/usr/share/zabbix-sql-scripts/postgresql/server.sql.gz"
         [[ -f "$ZCAT_PATH" ]] || ZCAT_PATH="/usr/share/zabbix/sql-scripts/postgresql/server.sql.gz"
@@ -305,6 +307,9 @@ fi
 if [[ "$TIPO_INSTALACAO" == "1" ]]; then
     progress_bar 4 5 "Ajustando frontend e PHP-FPM"
 
+    # Desativa o site padrão do Nginx para não conflitar com o Apache (porta 80)
+    rm -f /etc/nginx/sites-enabled/default
+
     NGINX_CONF="/etc/zabbix/nginx.conf"
     if [[ -f "$NGINX_CONF" ]]; then
         sed -i 's/# listen 8080;/listen 8080;/' "$NGINX_CONF"
@@ -320,6 +325,7 @@ if [[ "$TIPO_INSTALACAO" == "1" ]]; then
 fi
 
 progress_bar 5 5 "Iniciando serviços"
+systemctl daemon-reload
 for svc in php8.5-fpm php8.4-fpm php8.3-fpm php8.2-fpm php8.1-fpm; do
     if systemctl list-unit-files | grep -q "^${svc}.service"; then
         systemctl restart "$svc" 2>/dev/null || true
@@ -379,3 +385,9 @@ fi
 [[ -n "$DB_PASS" ]] && echo -e "Senha do BD...: ${YELLOW}${DB_PASS}${NC}"
 echo -e "\nCredenciais salvas em: ${CYAN}${CRED_FILE}${NC} (permissão 600)"
 echo -e "${YELLOW}Anote e depois apague o arquivo:${NC} rm -f ${CRED_FILE}"
+
+if [[ "$ZBX_VER" == "8.0" ]]; then
+    echo -e "\n${YELLOW}🔬 Nota de estudo (Zabbix 8.0):${NC}"
+    echo "- Versão LTS mais recente: ideal para explorar novos recursos."
+    echo "- Explore: ClickHouse, tipo JSON, Scatter plot e CEP."
+fi
